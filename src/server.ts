@@ -1,4 +1,4 @@
-// Server-side verification of the bankroll identity token: an RS256 JWT minted
+// Server-side verification of the bankroll session token: an RS256 JWT minted
 // by the bankroll api, sent by the host app as a passive per-request header, and
 // verified here against bankroll's public JWKS. This module is fully standalone —
 // it depends only on `jose` and never imports the client half of the SDK.
@@ -8,23 +8,27 @@ const ALG = 'RS256';
 const ISSUER = 'https://joinbankroll.com';
 const DEFAULT_JWKS_URL = 'https://joinbankroll.com/.well-known/jwks.json';
 
-export interface VerifiedToken {
-  sub: string;
-  username?: string;
-  geo?: string;
-  /**
-   * Identity/KYC verification state — three distinct cases:
-   *   ABSENT  — never verified (claim omitted)
-   *   false   — verification failed (rejected)
-   *   object  — APPROVED ({} = approved but no DOB on file, { age } = approved with age)
-   * Check with `typeof identity === 'object'`; gating on mere presence wrongly
-   * passes rejected users (whose value is `false`, which is also "present").
-   */
-  identity?: { age?: number } | false;
-  aud: string;
+export interface BankrollSession {
   iss: string;
+  aud: string;
   iat: number;
   exp: number;
+  /** The user's region for THIS session (current location, not their residence). */
+  geo?: string;
+  user: {
+    /** The user's wallet address (the JWT `sub`) — their stable id and payout target. */
+    wallet: string;
+    /** The user's Bankroll handle — always present (the host guarantees it per app token). */
+    username: string;
+    /**
+     * Identity verification state, always present:
+     *   false     — not verified (pending, never verified, or rejected)
+     *   { age }   — verified ({} if the user's DOB isn't on file)
+     * Truthy ⟺ the user has verified exactly one real identity. Gate real-money
+     * actions on truthiness.
+     */
+    identity: { age?: number } | false;
+  };
 }
 
 // jose handles JWKS caching, kid selection across multi-kid sets, and
@@ -39,21 +43,21 @@ function getKeySource(jwksUrl: string): ReturnType<typeof createRemoteJWKSet> {
   return keySource;
 }
 
-// The verification claim may arrive as `identity` or as `kyc` (the name the
-// public token docs use); the SDK accepts both and always exposes `identity`.
-function mapIdentity(raw: unknown): { age?: number } | false | undefined {
-  if (raw === false) return false;
+// The verification claim may arrive as `identity` or as `kyc` (the wire name);
+// accept both. A truthy object ({ age }) is verified; anything else — false,
+// omitted, or malformed — collapses to `false` (not verified).
+function mapIdentity(raw: unknown): { age?: number } | false {
   if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
     const age = (raw as Record<string, unknown>).age;
     return typeof age === 'number' ? { age } : {};
   }
-  return undefined;
+  return false;
 }
 
 export async function verifyToken(
   token: string | null | undefined,
   options: { audience: string; jwksUrl?: string },
-): Promise<VerifiedToken | null> {
+): Promise<BankrollSession | null> {
   // Misconfiguration is a programmer error, not a bad token — throw, don't fail closed.
   if (!options.audience) throw new Error('audience is required');
 
@@ -79,21 +83,24 @@ export async function verifyToken(
 
   const sub = payload.sub;
   if (typeof sub !== 'string' || sub.length === 0) return null;
-  const { iat, exp } = payload;
+  const { username, iat, exp } = payload;
+  // The host guarantees a username on every app token (the mint throws
+  // otherwise), so a token without one is malformed — fail closed.
+  if (typeof username !== 'string' || username.length === 0) return null;
   if (typeof iat !== 'number' || typeof exp !== 'number') return null;
 
-  const result: VerifiedToken = {
-    sub,
-    aud: options.audience,
+  const result: BankrollSession = {
     iss: ISSUER,
+    aud: options.audience,
     iat,
     exp,
+    user: {
+      wallet: sub,
+      username,
+      identity: mapIdentity(payload.identity !== undefined ? payload.identity : payload.kyc),
+    },
   };
-  if (typeof payload.username === 'string') result.username = payload.username;
   if (typeof payload.geo === 'string') result.geo = payload.geo;
-
-  const identity = mapIdentity(payload.identity !== undefined ? payload.identity : payload.kyc);
-  if (identity !== undefined) result.identity = identity;
 
   return result;
 }

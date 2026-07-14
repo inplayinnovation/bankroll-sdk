@@ -12,7 +12,7 @@ import {
 } from 'jose';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { verifyToken, type VerifiedToken } from '../src/server';
+import { verifyToken, type BankrollSession } from '../src/server';
 
 const ALG = 'RS256';
 const ISSUER = 'https://joinbankroll.com';
@@ -98,7 +98,7 @@ describe('verifyToken', () => {
     return jwks;
   }
 
-  it('accepts a valid token with full claims and returns a complete VerifiedToken', async () => {
+  it('accepts a valid token with full claims and returns a complete BankrollSession', async () => {
     const server = await serve();
     const issuedAt = Math.floor(Date.now() / 1000);
     const token = await mint({
@@ -111,11 +111,11 @@ describe('verifyToken', () => {
     const result = await verifyToken(token, { audience: AUDIENCE, jwksUrl: server.url });
 
     expect(result).not.toBeNull();
-    const v = result as VerifiedToken;
-    expect(v.sub).toBe('wallet-full');
-    expect(v.username).toBe('player-one');
+    const v = result as BankrollSession;
+    expect(v.user.wallet).toBe('wallet-full');
+    expect(v.user.username).toBe('player-one');
     expect(v.geo).toBe('US-NY');
-    expect(v.identity).toEqual({ age: 34 });
+    expect(v.user.identity).toEqual({ age: 34 });
     expect(v.aud).toBe(AUDIENCE);
     expect(v.iss).toBe(ISSUER);
     expect(v.iat).toBe(issuedAt);
@@ -123,19 +123,28 @@ describe('verifyToken', () => {
     expect(v.exp).toBeGreaterThan(v.iat);
   });
 
-  it('returns only the required fields for a minimal (sub-only) token', async () => {
+  it('returns only the required fields for a minimal token', async () => {
     const server = await serve();
-    const token = await mint({ key, subject: 'wallet-min' });
+    const token = await mint({ key, subject: 'wallet-min', claims: { username: 'min-user' } });
 
     const v = await verifyToken(token, { audience: AUDIENCE, jwksUrl: server.url });
 
     expect(v).not.toBeNull();
-    expect(v).toMatchObject({ sub: 'wallet-min', aud: AUDIENCE, iss: ISSUER });
+    expect(v).toMatchObject({
+      aud: AUDIENCE,
+      iss: ISSUER,
+      user: { wallet: 'wallet-min', username: 'min-user' },
+    });
     expect(typeof v!.iat).toBe('number');
     expect(typeof v!.exp).toBe('number');
-    expect('username' in v!).toBe(false);
     expect('geo' in v!).toBe(false);
-    expect('identity' in v!).toBe(false);
+    expect(v!.user.identity).toBe(false);
+  });
+
+  it('rejects a token with no username (the host guarantees one)', async () => {
+    const server = await serve();
+    const token = await mint({ key, subject: 'wallet-nouser' });
+    expect(await verifyToken(token, { audience: AUDIENCE, jwksUrl: server.url })).toBeNull();
   });
 
   describe('security', () => {
@@ -242,48 +251,48 @@ describe('verifyToken', () => {
   });
 
   describe('identity wire mapping', () => {
-    async function identityOf(claims: Record<string, unknown>): Promise<VerifiedToken> {
+    async function identityOf(claims: Record<string, unknown>): Promise<BankrollSession> {
       const server = await serve();
-      const token = await mint({ key, claims });
+      const token = await mint({ key, claims: { username: 'wire-user', ...claims } });
       const v = await verifyToken(token, { audience: AUDIENCE, jwksUrl: server.url });
       expect(v).not.toBeNull();
-      return v as VerifiedToken;
+      return v as BankrollSession;
     }
 
     it('maps kyc { age } to identity { age }', async () => {
       const v = await identityOf({ kyc: { age: 34 } });
-      expect(v.identity).toEqual({ age: 34 });
+      expect(v.user.identity).toEqual({ age: 34 });
     });
 
     it('maps kyc {} to identity {} (approved, no DOB)', async () => {
       const v = await identityOf({ kyc: {} });
-      expect(v.identity).toEqual({});
-      expect(typeof v.identity).toBe('object');
+      expect(v.user.identity).toEqual({});
+      expect(typeof v.user.identity).toBe('object');
     });
 
     it('maps kyc false to identity false (rejected)', async () => {
       const v = await identityOf({ kyc: false });
-      expect(v.identity).toBe(false);
+      expect(v.user.identity).toBe(false);
     });
 
-    it('omits identity when kyc is absent', async () => {
+    it('defaults identity to false when the claim is absent', async () => {
       const v = await identityOf({});
-      expect('identity' in v).toBe(false);
+      expect(v.user.identity).toBe(false);
     });
 
     it('maps a non-numeric age to {} (approved, unusable age)', async () => {
       const v = await identityOf({ kyc: { age: 'x' } });
-      expect(v.identity).toEqual({});
+      expect(v.user.identity).toEqual({});
     });
 
     it("prefers the new 'identity' claim over 'kyc' when both are present", async () => {
       const v = await identityOf({ identity: { age: 21 }, kyc: { age: 99 } });
-      expect(v.identity).toEqual({ age: 21 });
+      expect(v.user.identity).toEqual({ age: 21 });
     });
 
     it("prefers 'identity' false even when kyc says approved", async () => {
       const v = await identityOf({ identity: false, kyc: { age: 30 } });
-      expect(v.identity).toBe(false);
+      expect(v.user.identity).toBe(false);
     });
 
     it('does not expose unrecognised claims', async () => {
@@ -297,10 +306,14 @@ describe('verifyToken', () => {
     it('verifies a token signed by the second key in a multi-kid JWKS', async () => {
       const second = await makeSigningKey('bankroll-token-second');
       const server = await serve([key.publicJwk, second.publicJwk]);
-      const token = await mint({ key: second, subject: 'wallet-second' });
+      const token = await mint({
+        key: second,
+        subject: 'wallet-second',
+        claims: { username: 'second-user' },
+      });
       const v = await verifyToken(token, { audience: AUDIENCE, jwksUrl: server.url });
       expect(v).not.toBeNull();
-      expect(v!.sub).toBe('wallet-second');
+      expect(v!.user.wallet).toBe('wallet-second');
     });
 
     it('rejects a token whose signing key is not in the JWKS (unknown kid)', async () => {

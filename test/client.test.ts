@@ -11,6 +11,7 @@ async function load() {
 
 type BridgeShape = {
   version: string;
+  session?: unknown;
   identity?: unknown;
   pay?: unknown;
 };
@@ -36,6 +37,9 @@ function nowSeconds(): number {
 }
 function freshToken(): string {
   return mintToken({ sub: 'wallet', exp: nowSeconds() + 3600 });
+}
+function verifiedToken(): string {
+  return mintToken({ sub: 'wallet', exp: nowSeconds() + 3600, kyc: { age: 23 } });
 }
 function nearExpiryToken(): string {
   return mintToken({ sub: 'wallet', exp: nowSeconds() + 10 });
@@ -174,6 +178,86 @@ describe('identity', () => {
     const error = await bankroll.identity().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(BankrollError);
     expect((error as InstanceType<typeof BankrollError>).code).toBe('update_required');
+  });
+});
+
+describe('session', () => {
+  it('resolves the token from host.session()', async () => {
+    const token = freshToken();
+    const session = vi.fn().mockResolvedValue(token);
+    setBridge({ version: '1', session, pay: vi.fn() });
+    const { bankroll } = await load();
+    await expect(bankroll.session()).resolves.toBe(token);
+    expect(session).toHaveBeenCalledWith();
+  });
+
+  it('falls back to host.identity() on a legacy host with no session()', async () => {
+    const token = freshToken();
+    const identity = vi.fn().mockResolvedValue(token);
+    setBridge({ version: '1', identity, pay: vi.fn() });
+    const { bankroll } = await load();
+    await expect(bankroll.session()).resolves.toBe(token);
+    expect(identity).toHaveBeenCalledTimes(1);
+  });
+
+  it('deprecated identity() delegates to session()', async () => {
+    const token = freshToken();
+    const session = vi.fn().mockResolvedValue(token);
+    setBridge({ version: '1', session, pay: vi.fn() });
+    const { bankroll } = await load();
+    await expect(bankroll.identity()).resolves.toBe(token);
+    expect(session).toHaveBeenCalledTimes(1);
+  });
+
+  it('session({ identity: true }) calls host.session with { identity: true }', async () => {
+    const token = verifiedToken();
+    const session = vi.fn().mockResolvedValue(token);
+    setBridge({ version: '1', session, pay: vi.fn() });
+    const { bankroll } = await load();
+    await expect(bankroll.session({ identity: true })).resolves.toBe(token);
+    expect(session).toHaveBeenCalledWith({ identity: true });
+  });
+
+  it('session({ identity: true }) is update_required on a legacy host lacking session()', async () => {
+    const identity = vi.fn().mockResolvedValue(freshToken());
+    setBridge({ version: '1', identity, pay: vi.fn() });
+    const { bankroll, BankrollError } = await load();
+    const error = await bankroll.session({ identity: true }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BankrollError);
+    expect((error as InstanceType<typeof BankrollError>).code).toBe('update_required');
+    // Never silently hands back a possibly-unverified token from the legacy method.
+    expect(identity).not.toHaveBeenCalled();
+  });
+
+  it('maps a verification_declined rejection', async () => {
+    const session = vi.fn().mockRejectedValue(new Error('verification_declined'));
+    setBridge({ version: '1', session, pay: vi.fn() });
+    const { bankroll, BankrollError } = await load();
+    const error = await bankroll.session({ identity: true }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BankrollError);
+    expect((error as InstanceType<typeof BankrollError>).code).toBe('verification_declined');
+  });
+
+  it('does not reuse an unverified cached token for an identity request', async () => {
+    const unverified = freshToken();
+    const verified = verifiedToken();
+    const session = vi.fn().mockResolvedValueOnce(unverified).mockResolvedValueOnce(verified);
+    setBridge({ version: '1', session, pay: vi.fn() });
+    const { bankroll } = await load();
+    await bankroll.session(); // caches an unverified token
+    await expect(bankroll.session({ identity: true })).resolves.toBe(verified);
+    expect(session).toHaveBeenCalledTimes(2);
+    expect(session).toHaveBeenLastCalledWith({ identity: true });
+  });
+
+  it('reuses a verified cached token for a later plain session()', async () => {
+    const token = verifiedToken();
+    const session = vi.fn().mockResolvedValue(token);
+    setBridge({ version: '1', session, pay: vi.fn() });
+    const { bankroll } = await load();
+    await bankroll.session({ identity: true }); // caches a verified token
+    await expect(bankroll.session()).resolves.toBe(token);
+    expect(session).toHaveBeenCalledTimes(1); // plain call served from cache
   });
 });
 
