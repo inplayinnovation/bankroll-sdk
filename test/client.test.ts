@@ -358,6 +358,10 @@ describe('pay bridge-rejection mapping', () => {
     expect(await payCodeFor('insufficient_funds')).toBe('insufficient_funds');
   });
 
+  it('exact idempotency_conflict', async () => {
+    expect(await payCodeFor('idempotency_conflict')).toBe('idempotency_conflict');
+  });
+
   it('exact "pay requires a positive whole-cent amount" → invalid_amount', async () => {
     expect(await payCodeFor('pay requires a positive whole-cent amount')).toBe('invalid_amount');
   });

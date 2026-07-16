@@ -73,6 +73,7 @@ const CODE_INSUFFICIENT_FUNDS = 'insufficient_funds';
 const CODE_INVALID_AMOUNT = 'invalid_amount';
 const CODE_CAPABILITY_NOT_REGISTERED = 'capability_not_registered';
 const CODE_MANIFEST_ERROR = 'manifest_error';
+const CODE_IDEMPOTENCY_CONFLICT = 'idempotency_conflict';
 const CODE_UNKNOWN = 'unknown';
 
 // Additional reasons the host can reject with — part of the stable public
@@ -92,6 +93,7 @@ export type BankrollErrorCode =
   | typeof CODE_INVALID_AMOUNT
   | typeof CODE_CAPABILITY_NOT_REGISTERED
   | typeof CODE_MANIFEST_ERROR
+  | typeof CODE_IDEMPOTENCY_CONFLICT
   | ReservedErrorCode
   | typeof CODE_UNKNOWN;
 
@@ -124,6 +126,7 @@ const WIRE_CONSENT_DECLINED = 'consent_declined';
 const WIRE_VERIFICATION_DECLINED = 'verification_declined';
 const WIRE_INSUFFICIENT_FUNDS = 'insufficient_funds';
 const WIRE_INVALID_AMOUNT = 'pay requires a positive whole-cent amount';
+const WIRE_IDEMPOTENCY_CONFLICT = 'idempotency_conflict';
 const WIRE_NOT_REGISTERED_MARKER = ' is not registered for ';
 const WIRE_MANIFEST_MARKER = 'Bankroll manifest';
 
@@ -132,6 +135,7 @@ function mapReasonToCode(message: string): BankrollErrorCode {
   if (message === WIRE_VERIFICATION_DECLINED) return CODE_VERIFICATION_DECLINED;
   if (message === WIRE_INSUFFICIENT_FUNDS) return CODE_INSUFFICIENT_FUNDS;
   if (message === WIRE_INVALID_AMOUNT) return CODE_INVALID_AMOUNT;
+  if (message === WIRE_IDEMPOTENCY_CONFLICT) return CODE_IDEMPOTENCY_CONFLICT;
   if (message.includes(WIRE_NOT_REGISTERED_MARKER)) return CODE_CAPABILITY_NOT_REGISTERED;
   if (message.includes(WIRE_MANIFEST_MARKER)) return CODE_MANIFEST_ERROR;
   // Everything else is deliberately 'unknown' with its message preserved —
@@ -295,7 +299,19 @@ function identity(): Promise<string> {
 // Pay
 // ---------------------------------------------------------------------------
 
-export type PayInput = { amountCents: number; memo?: string; idempotencyKey?: string };
+export type PayInput = {
+  /** Whole US cents; must be a positive integer. */
+  amountCents: number;
+  /** Optional on-chain label; trimmed, max 80 characters. */
+  memo?: string;
+  /**
+   * Names the logical payment: retries with the same key never charge twice —
+   * a settled payment resolves with its signature, an in-flight one is
+   * awaited. Reuse with different parameters rejects `idempotency_conflict`.
+   * Max 255 characters; retained 24h, scoped to this app and user.
+   */
+  idempotencyKey?: string;
+};
 
 interface BridgePayload {
   amountCents: number;
