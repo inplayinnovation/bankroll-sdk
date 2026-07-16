@@ -74,6 +74,7 @@ const CODE_INVALID_AMOUNT = 'invalid_amount';
 const CODE_CAPABILITY_NOT_REGISTERED = 'capability_not_registered';
 const CODE_MANIFEST_ERROR = 'manifest_error';
 const CODE_IDEMPOTENCY_CONFLICT = 'idempotency_conflict';
+const CODE_PAYMENT_DENIED = 'payment_denied';
 const CODE_UNKNOWN = 'unknown';
 
 // Additional reasons the host can reject with — part of the stable public
@@ -94,6 +95,7 @@ export type BankrollErrorCode =
   | typeof CODE_CAPABILITY_NOT_REGISTERED
   | typeof CODE_MANIFEST_ERROR
   | typeof CODE_IDEMPOTENCY_CONFLICT
+  | typeof CODE_PAYMENT_DENIED
   | ReservedErrorCode
   | typeof CODE_UNKNOWN;
 
@@ -127,6 +129,7 @@ const WIRE_VERIFICATION_DECLINED = 'verification_declined';
 const WIRE_INSUFFICIENT_FUNDS = 'insufficient_funds';
 const WIRE_INVALID_AMOUNT = 'pay requires a positive whole-cent amount';
 const WIRE_IDEMPOTENCY_CONFLICT = 'idempotency_conflict';
+const WIRE_PAYMENT_DENIED = 'payment_denied';
 const WIRE_NOT_REGISTERED_MARKER = ' is not registered for ';
 const WIRE_MANIFEST_MARKER = 'Bankroll manifest';
 
@@ -136,6 +139,7 @@ function mapReasonToCode(message: string): BankrollErrorCode {
   if (message === WIRE_INSUFFICIENT_FUNDS) return CODE_INSUFFICIENT_FUNDS;
   if (message === WIRE_INVALID_AMOUNT) return CODE_INVALID_AMOUNT;
   if (message === WIRE_IDEMPOTENCY_CONFLICT) return CODE_IDEMPOTENCY_CONFLICT;
+  if (message === WIRE_PAYMENT_DENIED) return CODE_PAYMENT_DENIED;
   if (message.includes(WIRE_NOT_REGISTERED_MARKER)) return CODE_CAPABILITY_NOT_REGISTERED;
   if (message.includes(WIRE_MANIFEST_MARKER)) return CODE_MANIFEST_ERROR;
   // Everything else is deliberately 'unknown' with its message preserved —
