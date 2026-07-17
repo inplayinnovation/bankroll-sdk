@@ -1,6 +1,6 @@
 # @joinbankroll/sdk
 
-Typed client for **Build on Bankroll** apps — a thin wrapper over the `window.bankroll` bridge the Bankroll app injects, plus server-side verification of the Bankroll session token.
+Typed client for **Build on Bankroll** apps — a thin wrapper over the `window.bankroll` bridge the Bankroll app injects, plus server-side verification of the Bankroll session token and confirmation of settled payments.
 
 ```
 npm install @joinbankroll/sdk
@@ -16,11 +16,16 @@ await bankroll.pay({ amountCents: 500 })   // charge $5.00 to your payment addre
 ```
 
 ```ts
-import { verifyToken } from '@joinbankroll/sdk/server'
+import { verifyToken, confirmPayment } from '@joinbankroll/sdk/server'
 
 const session = await verifyToken(token, { audience: 'https://yourapp.example' })
 if (!session) return unauthorized()
 // session.user.wallet — the user's stable id, and payout target
+
+// env: SOLANA_RPC_URL — confirm a settled pay() before releasing value
+const payment = await confirmPayment(signature)
+// { payer, payee, amountCents, memo } — check payee is your payment address,
+// amountCents matches the order, payer is session.user.wallet; store the signature.
 ```
 
 ## 📚 [Read the docs →](https://docs.joinbankroll.com/build/overview)
@@ -37,7 +42,7 @@ Everything lives there and stays current:
 Two entry points, so server-only code never reaches the browser:
 
 - `@joinbankroll/sdk` — browser client. Zero dependencies, SSR-safe.
-- `@joinbankroll/sdk/server` — token verification. Node ≥ 20, uses [jose](https://github.com/panva/jose). Never imports the client.
+- `@joinbankroll/sdk/server` — token verification and payment confirmation. Node ≥ 20, uses [jose](https://github.com/panva/jose). Never imports the client.
 
 ESM only. Types are bundled.
 

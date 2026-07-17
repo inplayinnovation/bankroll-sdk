@@ -1,7 +1,7 @@
 {
   "name": "@joinbankroll/sdk",
-  "version": "0.2.1",
-  "description": "Build on Bankroll — typed client for the window.bankroll bridge and server-side session token verification",
+  "version": "0.3.0",
+  "description": "Build on Bankroll — typed client for the window.bankroll bridge, server-side session token verification, and payment confirmation",
   "license": "MIT",
   "repository": {
     "type": "git",

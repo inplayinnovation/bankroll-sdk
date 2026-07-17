@@ -1,8 +1,19 @@
 // Server-side verification of the bankroll session token: an RS256 JWT minted
 // by the bankroll api, sent by the host app as a passive per-request header, and
-// verified here against bankroll's public JWKS. This module is fully standalone —
+// verified here against bankroll's public JWKS. This entry is fully standalone —
 // it depends only on `jose` and never imports the client half of the SDK.
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+
+export {
+  BASE_UNITS_PER_CENT,
+  ConfirmPaymentError,
+  HSUSD_DECIMALS,
+  HSUSD_MINT,
+  confirmPayment,
+  type ConfirmPaymentErrorCode,
+  type ConfirmPaymentOptions,
+  type ConfirmedPayment,
+} from './payments';
 
 const ALG = 'RS256';
 const ISSUER = 'https://joinbankroll.com';
