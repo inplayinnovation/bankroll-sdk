@@ -4,7 +4,7 @@
 //
 // The host is the trust boundary: it resolves the origin, enforces consent, and
 // is the only thing that signs. This module never touches a wallet — it only
-// brokers the two capabilities (identity, pay) and normalises the host's
+// brokers the two capabilities (session, charge) and normalises the host's
 // machine-readable rejection reasons into typed BankrollError codes.
 
 // The lowest window.bankroll.version this SDK can talk to. Below it (or a
@@ -16,7 +16,7 @@ const MIN_HOST_VERSION = 1;
 // with one that expires mid-flight. Server TTL is 15 min.
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
 
-// Cap on a site-supplied pay memo — matches the host's own cap so we truncate
+// Cap on a site-supplied charge memo — matches the host's own cap so we truncate
 // before the bridge does rather than sending something it will silently trim.
 const MEMO_MAX_LENGTH = 80;
 
@@ -28,6 +28,8 @@ export const BANKROLL_TOKEN_HEADER = 'x-bankroll-token';
 const PLAY_LINK_BASE = 'https://joinbankroll.com/play?url=';
 const HTTPS_PROTOCOL = 'https:';
 
+// The bridge method charge() calls — the wire name stays `pay` (versioned
+// protocol against shipped native apps); only the SDK surface renamed.
 const PAY_METHOD = 'pay';
 
 // ---------------------------------------------------------------------------
@@ -52,7 +54,7 @@ const leadingInt = (version: string): number => parseInt(version, 10);
 //   'update_required' — a Bankroll app too old for this SDK (below-min or
 //                       non-numeric window.bankroll, or the legacy pre-SDK
 //                       bridge signalled only by window.__BANKROLL_CONFIG__).
-//   'ready'           — a current host; session()/pay() will work.
+//   'ready'           — a current host; session()/charge() will work.
 function status(): BankrollStatus {
   if (typeof window === 'undefined') return STATUS_UNAVAILABLE;
   const host = window.bankroll;
@@ -160,7 +162,7 @@ function mapBridgeError(error: unknown): BankrollError {
 
 type BankrollBridge = NonNullable<Window['bankroll']>;
 
-// Pre-flight for pay(): the host must be ready AND expose the method. An old
+// Pre-flight for charge(): the host must be ready AND expose the method. An old
 // host can present window.bankroll without a given method, so calling it would
 // be a synchronous TypeError — feature-detect and surface it as
 // 'update_required' instead.
@@ -300,17 +302,17 @@ function identity(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Pay
+// Charge
 // ---------------------------------------------------------------------------
 
-export type PayInput = {
+export type ChargeInput = {
   /** Whole US cents; must be a positive integer. */
   amountCents: number;
   /** Optional on-chain label; trimmed, max 80 characters. */
   memo?: string;
   /**
-   * Names the logical payment: retries with the same key never charge twice —
-   * a settled payment resolves with its signature, an in-flight one is
+   * Names the logical charge: retries with the same key never charge twice —
+   * a settled charge resolves with its signature, an in-flight one is
    * awaited. Reuse with different parameters rejects `idempotency_conflict`.
    * Max 255 characters; retained 24h, scoped to this app and user.
    */
@@ -323,7 +325,10 @@ interface BridgePayload {
   memo?: string;
 }
 
-async function pay(input: PayInput): Promise<string> {
+// Charge the user's Bankroll balance; resolves with the settled transfer's
+// signature, which your server confirms with confirmCharge() before releasing
+// value.
+async function charge(input: ChargeInput): Promise<string> {
   const bridge = requireBridge(PAY_METHOD);
   const { amountCents } = input;
   // Validate before the bridge, using the host's own wire message so a local
@@ -355,7 +360,7 @@ export const bankroll = {
   session,
   /** @deprecated Use {@link session}. */
   identity,
-  pay,
+  charge,
 };
 
 // Canonical fetch decorator: attaches the session token on every request when

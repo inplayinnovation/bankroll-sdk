@@ -268,7 +268,7 @@ describe('pay validation', () => {
       const payMock = vi.fn();
       setBridge({ version: '1', identity: vi.fn(), pay: payMock });
       const { bankroll, BankrollError } = await load();
-      const error = await bankroll.pay({ amountCents }).catch((e: unknown) => e);
+      const error = await bankroll.charge({ amountCents }).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(BankrollError);
       expect((error as InstanceType<typeof BankrollError>).code).toBe('invalid_amount');
       expect((error as InstanceType<typeof BankrollError>).message).toBe(
@@ -296,7 +296,7 @@ describe('pay bridge payload', () => {
     const payMock = vi.fn().mockResolvedValue('sig');
     setBridge({ version: '1', identity: vi.fn(), pay: payMock });
     const { bankroll } = await load();
-    await bankroll.pay({ amountCents: 100, memo: `  ${'x'.repeat(200)}  ` });
+    await bankroll.charge({ amountCents: 100, memo: `  ${'x'.repeat(200)}  ` });
     expect(payPayload(payMock).memo).toBe('x'.repeat(80));
   });
 
@@ -304,7 +304,7 @@ describe('pay bridge payload', () => {
     const payMock = vi.fn().mockResolvedValue('sig');
     setBridge({ version: '1', identity: vi.fn(), pay: payMock });
     const { bankroll } = await load();
-    await bankroll.pay({ amountCents: 100, memo: '   ' });
+    await bankroll.charge({ amountCents: 100, memo: '   ' });
     expect('memo' in payPayload(payMock)).toBe(false);
   });
 
@@ -312,7 +312,7 @@ describe('pay bridge payload', () => {
     const payMock = vi.fn().mockResolvedValue('sig');
     setBridge({ version: '1', identity: vi.fn(), pay: payMock });
     const { bankroll } = await load();
-    await bankroll.pay({ amountCents: 100 });
+    await bankroll.charge({ amountCents: 100 });
     expect('memo' in payPayload(payMock)).toBe(false);
   });
 
@@ -320,7 +320,7 @@ describe('pay bridge payload', () => {
     const payMock = vi.fn().mockResolvedValue('sig');
     setBridge({ version: '1', identity: vi.fn(), pay: payMock });
     const { bankroll } = await load();
-    await bankroll.pay({ amountCents: 100 });
+    await bankroll.charge({ amountCents: 100 });
     expect(payPayload(payMock).idempotencyKey).toMatch(UUID_RE);
   });
 
@@ -328,7 +328,7 @@ describe('pay bridge payload', () => {
     const payMock = vi.fn().mockResolvedValue('sig');
     setBridge({ version: '1', identity: vi.fn(), pay: payMock });
     const { bankroll } = await load();
-    await bankroll.pay({ amountCents: 100, idempotencyKey: 'caller-key-123' });
+    await bankroll.charge({ amountCents: 100, idempotencyKey: 'caller-key-123' });
     expect(payPayload(payMock).idempotencyKey).toBe('caller-key-123');
   });
 
@@ -336,7 +336,7 @@ describe('pay bridge payload', () => {
     const payMock = vi.fn().mockResolvedValue('the-signature');
     setBridge({ version: '1', identity: vi.fn(), pay: payMock });
     const { bankroll } = await load();
-    await expect(bankroll.pay({ amountCents: 100 })).resolves.toBe('the-signature');
+    await expect(bankroll.charge({ amountCents: 100 })).resolves.toBe('the-signature');
   });
 });
 
@@ -345,7 +345,7 @@ describe('pay bridge-rejection mapping', () => {
     const payMock = vi.fn().mockRejectedValue(new Error(reason));
     setBridge({ version: '1', identity: vi.fn(), pay: payMock });
     const { bankroll, BankrollError } = await load();
-    const error = await bankroll.pay({ amountCents: 100 }).catch((e: unknown) => e);
+    const error = await bankroll.charge({ amountCents: 100 }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(BankrollError);
     return (error as InstanceType<typeof BankrollError>).code;
   }
@@ -392,7 +392,7 @@ describe('pay bridge-rejection mapping', () => {
     const payMock = vi.fn().mockRejectedValue(new Error('Authentication required'));
     setBridge({ version: '1', identity: vi.fn(), pay: payMock });
     const { bankroll, BankrollError } = await load();
-    const error = await bankroll.pay({ amountCents: 100 }).catch((e: unknown) => e);
+    const error = await bankroll.charge({ amountCents: 100 }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(BankrollError);
     expect((error as InstanceType<typeof BankrollError>).code).toBe('unknown');
     expect((error as InstanceType<typeof BankrollError>).message).toBe('Authentication required');

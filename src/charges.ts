@@ -1,7 +1,7 @@
-// Server-side confirmation of a settled payment. `pay()` resolves with the
-// settled transfer's signature; this module fetches that transaction from the
-// app's own Solana RPC and returns the payment's facts — who paid whom, how
-// much, and the memo. Comparing those facts to the order, and storing the
+// Server-side confirmation of a settled charge. `bankroll.charge()` resolves
+// with the settled transfer's signature; this module fetches that transaction
+// from the app's own Solana RPC and returns the charge's facts — who paid whom,
+// how much, and the memo. Comparing those facts to the order, and storing the
 // signature against replay, is deliberately left to the app: the SDK observes,
 // the app decides.
 
@@ -22,23 +22,23 @@ const POLL_INTERVAL_MS = 1_500;
 // nearly spent, so a tight timeout can't strangle the one request it makes.
 const MIN_ATTEMPT_TIMEOUT_MS = 1_000;
 
-export type ConfirmPaymentErrorCode =
+export type ConfirmChargeErrorCode =
   | 'not_found' // never became visible before the deadline
   | 'failed_on_chain' // the transaction landed but failed
   | 'not_a_payment' // no lone HSUSD payer→payee transfer in the transaction
   | 'rpc_error'; // the RPC endpoint kept failing or answered malformed until the deadline
 
-export class ConfirmPaymentError extends Error {
-  readonly code: ConfirmPaymentErrorCode;
+export class ConfirmChargeError extends Error {
+  readonly code: ConfirmChargeErrorCode;
 
-  constructor(code: ConfirmPaymentErrorCode, message: string, options?: { cause?: unknown }) {
+  constructor(code: ConfirmChargeErrorCode, message: string, options?: { cause?: unknown }) {
     super(message, options);
-    this.name = 'ConfirmPaymentError';
+    this.name = 'ConfirmChargeError';
     this.code = code;
   }
 }
 
-export interface ConfirmedPayment {
+export interface ConfirmedCharge {
   /** Wallet the HSUSD left. Compare to your verified session's `user.wallet`. */
   payer: string;
   /** Wallet the HSUSD arrived at. Compare to your `capabilities.payments` address. */
@@ -46,17 +46,15 @@ export interface ConfirmedPayment {
   /** Amount received, in US cents. Fractional only if the transfer wasn't whole cents. */
   amountCents: number;
   /**
-   * Memo attached to the transaction, or null. For payments made through
-   * `pay()` this is the string the page passed (trimmed, ≤ 80 chars), but the
-   * value is read from the chain — a transaction built outside `pay()` can
-   * carry anything, so treat it as untrusted, unbounded input.
+   * Memo attached to the transaction, or null. For charges made through
+   * `charge()` this is the string the page passed (trimmed, ≤ 80 chars), but
+   * the value is read from the chain — a transaction built outside `charge()`
+   * can carry anything, so treat it as untrusted, unbounded input.
    */
   memo: string | null;
 }
 
-export interface ConfirmPaymentOptions {
-  /** Overrides the SOLANA_RPC_URL environment variable. */
-  rpcUrl?: string;
+export interface ConfirmChargeOptions {
   /**
    * How long to keep polling while the transaction isn't visible yet or the
    * RPC fails transiently. Each RPC attempt is also individually bounded, so a
@@ -111,25 +109,25 @@ async function fetchTransaction(
       }),
     });
   } catch (cause) {
-    throw new ConfirmPaymentError('rpc_error', `RPC request to ${rpcUrl} failed`, { cause });
+    throw new ConfirmChargeError('rpc_error', `RPC request to ${rpcUrl} failed`, { cause });
   }
   if (!response.ok) {
-    throw new ConfirmPaymentError('rpc_error', `RPC responded ${response.status}`);
+    throw new ConfirmChargeError('rpc_error', `RPC responded ${response.status}`);
   }
   let body: { error?: { code?: number; message?: string }; result?: RpcTransaction | null };
   try {
     body = await response.json();
   } catch (cause) {
-    throw new ConfirmPaymentError('rpc_error', 'RPC responded with invalid JSON', { cause });
+    throw new ConfirmChargeError('rpc_error', 'RPC responded with invalid JSON', { cause });
   }
   if (body.error) {
-    throw new ConfirmPaymentError(
+    throw new ConfirmChargeError(
       'rpc_error',
       `RPC error ${body.error.code}: ${body.error.message}`,
     );
   }
   if (!('result' in body)) {
-    throw new ConfirmPaymentError('rpc_error', 'RPC response has neither result nor error');
+    throw new ConfirmChargeError('rpc_error', 'RPC response has neither result nor error');
   }
   return body.result ?? null;
 }
@@ -169,33 +167,33 @@ function extractMemo(parsed: RpcTransaction): string | null {
 }
 
 /**
- * Fetches the settled payment `tx` (the signature `pay()` resolved with) from
- * your Solana RPC and returns its facts. Throws ConfirmPaymentError — a return
- * value means the transfer settled on-chain.
+ * Fetches the settled charge `tx` (the signature `bankroll.charge()` resolved
+ * with) from your Solana RPC (SOLANA_RPC_URL) and returns its facts. Throws
+ * ConfirmChargeError — a return value means the transfer settled on-chain.
  *
  * The facts are yours to check before releasing value: `payee` must be your
  * payment address, `amountCents` must match the order, `payer` must match the
- * session's wallet — and store the signature (it's unique per payment) so the
- * same payment can't be redeemed twice.
+ * session's wallet — and store the signature (it's unique per charge) so the
+ * same charge can't be redeemed twice.
  */
-export async function confirmPayment(
+export async function confirmCharge(
   tx: string,
-  options?: ConfirmPaymentOptions,
-): Promise<ConfirmedPayment> {
-  const rpcUrl = options?.rpcUrl ?? process.env.SOLANA_RPC_URL;
-  // Misconfiguration is a programmer error, not a failed payment — throw plain.
-  if (!rpcUrl) throw new Error('SOLANA_RPC_URL is required (env var or options.rpcUrl)');
+  options?: ConfirmChargeOptions,
+): Promise<ConfirmedCharge> {
+  const rpcUrl = process.env.SOLANA_RPC_URL;
+  // Misconfiguration is a programmer error, not a failed charge — throw plain.
+  if (!rpcUrl) throw new Error('SOLANA_RPC_URL is required');
 
   const deadline = Date.now() + (options?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   let parsed: RpcTransaction | null = null;
-  let lastRpcError: ConfirmPaymentError | null = null;
+  let lastRpcError: ConfirmChargeError | null = null;
   while (!parsed) {
     const attemptTimeoutMs = Math.max(deadline - Date.now(), MIN_ATTEMPT_TIMEOUT_MS);
     try {
       parsed = await fetchTransaction(rpcUrl, tx, attemptTimeoutMs);
       lastRpcError = null;
     } catch (error) {
-      if (!(error instanceof ConfirmPaymentError)) throw error;
+      if (!(error instanceof ConfirmChargeError)) throw error;
       lastRpcError = error;
     }
     if (parsed) break;
@@ -203,17 +201,17 @@ export async function confirmPayment(
     if (remaining <= 0) {
       throw (
         lastRpcError ??
-        new ConfirmPaymentError('not_found', `transaction ${tx} not found before the deadline`)
+        new ConfirmChargeError('not_found', `transaction ${tx} not found before the deadline`)
       );
     }
     await new Promise((resolve) => setTimeout(resolve, Math.min(POLL_INTERVAL_MS, remaining)));
   }
 
   if (parsed.meta?.err) {
-    throw new ConfirmPaymentError('failed_on_chain', `transaction ${tx} failed on-chain`);
+    throw new ConfirmChargeError('failed_on_chain', `transaction ${tx} failed on-chain`);
   }
   if (!parsed.meta) {
-    throw new ConfirmPaymentError('not_a_payment', `transaction ${tx} has no balance metadata`);
+    throw new ConfirmChargeError('not_a_payment', `transaction ${tx} has no balance metadata`);
   }
 
   const deltas = hsusdDeltasByOwner(parsed.meta);
@@ -222,7 +220,7 @@ export async function confirmPayment(
   const credit = credits[0];
   const debit = debits[0];
   if (credits.length !== 1 || debits.length !== 1 || !credit || !debit) {
-    throw new ConfirmPaymentError(
+    throw new ConfirmChargeError(
       'not_a_payment',
       `transaction ${tx} is not a single HSUSD payer→payee transfer ` +
         `(${debits.length} debited, ${credits.length} credited)`,

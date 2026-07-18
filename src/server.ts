@@ -6,14 +6,24 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 export {
   BASE_UNITS_PER_CENT,
-  ConfirmPaymentError,
+  ConfirmChargeError,
   HSUSD_DECIMALS,
   HSUSD_MINT,
-  confirmPayment,
-  type ConfirmPaymentErrorCode,
-  type ConfirmPaymentOptions,
-  type ConfirmedPayment,
-} from './payments';
+  confirmCharge,
+  type ConfirmChargeErrorCode,
+  type ConfirmChargeOptions,
+  type ConfirmedCharge,
+} from './charges';
+
+export {
+  PayError,
+  keypairSigner,
+  pay,
+  type PayErrorCode,
+  type PayInput,
+  type PayOptions,
+  type PaymentSigner,
+} from './payouts';
 
 const ALG = 'RS256';
 const ISSUER = 'https://joinbankroll.com';

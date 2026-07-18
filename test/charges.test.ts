@@ -6,10 +6,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   BASE_UNITS_PER_CENT,
-  ConfirmPaymentError,
+  ConfirmChargeError,
   HSUSD_MINT,
-  confirmPayment,
-} from '../src/payments';
+  confirmCharge,
+} from '../src/charges';
 
 const SIGNATURE = '5VERYrealLookingBase58TransactionSignatureUsedInTests1111111111111111111111111111';
 const PAYER = 'PayerWa11etAddress1111111111111111111111111';
@@ -32,7 +32,7 @@ interface TxInput {
   meta?: null;
 }
 
-// The slice of a jsonParsed getTransaction result confirmPayment reads, shaped
+// The slice of a jsonParsed getTransaction result confirmCharge reads, shaped
 // like the real RPC response.
 function paymentTx(input: TxInput = {}): object {
   const toBalance = (balance: TokenBalanceInput, accountIndex: number) => ({
@@ -127,20 +127,20 @@ async function startRpcServer(replies: RpcReply[]): Promise<RpcServer> {
 
 async function expectCode(
   promise: Promise<unknown>,
-  code: ConfirmPaymentError['code'],
-): Promise<ConfirmPaymentError> {
+  code: ConfirmChargeError['code'],
+): Promise<ConfirmChargeError> {
   const error = await promise.then(
     () => {
-      throw new Error(`expected ConfirmPaymentError(${code}), but the call resolved`);
+      throw new Error(`expected ConfirmChargeError(${code}), but the call resolved`);
     },
     (e: unknown) => e,
   );
-  expect(error).toBeInstanceOf(ConfirmPaymentError);
-  expect((error as ConfirmPaymentError).code).toBe(code);
-  return error as ConfirmPaymentError;
+  expect(error).toBeInstanceOf(ConfirmChargeError);
+  expect((error as ConfirmChargeError).code).toBe(code);
+  return error as ConfirmChargeError;
 }
 
-describe('confirmPayment', () => {
+describe('confirmCharge', () => {
   let rpc: RpcServer | undefined;
   const savedEnv = process.env.SOLANA_RPC_URL;
 
@@ -151,15 +151,17 @@ describe('confirmPayment', () => {
     else process.env.SOLANA_RPC_URL = savedEnv;
   });
 
+  // confirmCharge reads SOLANA_RPC_URL — point it at the local server.
   async function serve(replies: RpcReply[]): Promise<RpcServer> {
     rpc = await startRpcServer(replies);
+    process.env.SOLANA_RPC_URL = rpc.url;
     return rpc;
   }
 
   it('returns the facts of a settled payment', async () => {
     const server = await serve([rpcResult(paymentTx({ memo: 'order:1234' }))]);
 
-    const payment = await confirmPayment(SIGNATURE, { rpcUrl: server.url });
+    const payment = await confirmCharge(SIGNATURE);
 
     expect(payment).toEqual({
       payer: PAYER,
@@ -172,7 +174,7 @@ describe('confirmPayment', () => {
   it('sends a well-formed getTransaction request', async () => {
     const server = await serve([rpcResult(paymentTx())]);
 
-    await confirmPayment(SIGNATURE, { rpcUrl: server.url });
+    await confirmCharge(SIGNATURE);
 
     expect(server.requests[0]).toMatchObject({
       jsonrpc: '2.0',
@@ -186,7 +188,7 @@ describe('confirmPayment', () => {
 
   it('returns a null memo when the payment has none', async () => {
     const server = await serve([rpcResult(paymentTx())]);
-    const payment = await confirmPayment(SIGNATURE, { rpcUrl: server.url });
+    const payment = await confirmCharge(SIGNATURE);
     expect(payment.memo).toBeNull();
   });
 
@@ -208,7 +210,7 @@ describe('confirmPayment', () => {
     ];
     const server = await serve([rpcResult(tx)]);
 
-    const payment = await confirmPayment(SIGNATURE, { rpcUrl: server.url });
+    const payment = await confirmCharge(SIGNATURE);
 
     expect(payment.memo).toBe('order:inner');
   });
@@ -230,7 +232,7 @@ describe('confirmPayment', () => {
       ),
     ]);
 
-    const payment = await confirmPayment(SIGNATURE, { rpcUrl: server.url });
+    const payment = await confirmCharge(SIGNATURE);
 
     expect(payment.amountCents).toBe(Number(hugeCents));
   });
@@ -253,7 +255,7 @@ describe('confirmPayment', () => {
       ),
     ]);
 
-    const payment = await confirmPayment(SIGNATURE, { rpcUrl: server.url });
+    const payment = await confirmCharge(SIGNATURE);
 
     expect(payment.payer).toBe(PAYER);
     expect(payment.amountCents).toBe(500);
@@ -275,7 +277,7 @@ describe('confirmPayment', () => {
       ),
     ]);
 
-    const payment = await confirmPayment(SIGNATURE, { rpcUrl: server.url });
+    const payment = await confirmCharge(SIGNATURE);
 
     expect(payment.amountCents).not.toBe(500);
     expect(payment.amountCents).toBeCloseTo(500.0000001, 10);
@@ -285,7 +287,7 @@ describe('confirmPayment', () => {
     it('retries while the transaction is not yet visible to the queried node', async () => {
       const server = await serve([rpcResult(null), rpcResult(paymentTx())]);
 
-      const payment = await confirmPayment(SIGNATURE, { rpcUrl: server.url });
+      const payment = await confirmCharge(SIGNATURE);
 
       expect(payment.amountCents).toBe(500);
       expect(server.hits).toBe(2);
@@ -295,7 +297,7 @@ describe('confirmPayment', () => {
       const server = await serve([rpcResult(null)]);
 
       const error = await expectCode(
-        confirmPayment(SIGNATURE, { rpcUrl: server.url, timeoutMs: 50 }),
+        confirmCharge(SIGNATURE, { timeoutMs: 50 }),
         'not_found',
       );
 
@@ -309,12 +311,12 @@ describe('confirmPayment', () => {
       const server = await serve([
         rpcResult(paymentTx({ err: { InstructionError: [0, { Custom: 1 }] } })),
       ]);
-      await expectCode(confirmPayment(SIGNATURE, { rpcUrl: server.url }), 'failed_on_chain');
+      await expectCode(confirmCharge(SIGNATURE), 'failed_on_chain');
     });
 
     it('throws not_a_payment when no HSUSD moved', async () => {
       const server = await serve([rpcResult(paymentTx({ pre: [], post: [] }))]);
-      await expectCode(confirmPayment(SIGNATURE, { rpcUrl: server.url }), 'not_a_payment');
+      await expectCode(confirmCharge(SIGNATURE), 'not_a_payment');
     });
 
     it('throws not_a_payment when only another mint moved', async () => {
@@ -332,7 +334,7 @@ describe('confirmPayment', () => {
           }),
         ),
       ]);
-      await expectCode(confirmPayment(SIGNATURE, { rpcUrl: server.url }), 'not_a_payment');
+      await expectCode(confirmCharge(SIGNATURE), 'not_a_payment');
     });
 
     it('throws not_a_payment when more than one wallet was credited', async () => {
@@ -352,7 +354,7 @@ describe('confirmPayment', () => {
           }),
         ),
       ]);
-      await expectCode(confirmPayment(SIGNATURE, { rpcUrl: server.url }), 'not_a_payment');
+      await expectCode(confirmCharge(SIGNATURE), 'not_a_payment');
     });
 
     it('throws not_a_payment for a self-transfer (deltas net to zero)', async () => {
@@ -370,12 +372,12 @@ describe('confirmPayment', () => {
           }),
         ),
       ]);
-      await expectCode(confirmPayment(SIGNATURE, { rpcUrl: server.url }), 'not_a_payment');
+      await expectCode(confirmCharge(SIGNATURE), 'not_a_payment');
     });
 
     it('throws not_a_payment when the transaction has no balance metadata', async () => {
       const server = await serve([rpcResult(paymentTx({ meta: null }))]);
-      await expectCode(confirmPayment(SIGNATURE, { rpcUrl: server.url }), 'not_a_payment');
+      await expectCode(confirmCharge(SIGNATURE), 'not_a_payment');
     });
 
     it('ignores balance entries without an owner', async () => {
@@ -395,7 +397,7 @@ describe('confirmPayment', () => {
           }),
         ),
       ]);
-      const payment = await confirmPayment(SIGNATURE, { rpcUrl: server.url });
+      const payment = await confirmCharge(SIGNATURE);
       expect(payment.amountCents).toBe(500);
     });
   });
@@ -404,7 +406,7 @@ describe('confirmPayment', () => {
     it('throws rpc_error on a non-200 response once the deadline passes', async () => {
       const server = await serve([{ status: 500, body: 'oops' }]);
       await expectCode(
-        confirmPayment(SIGNATURE, { rpcUrl: server.url, timeoutMs: 0 }),
+        confirmCharge(SIGNATURE, { timeoutMs: 0 }),
         'rpc_error',
       );
     });
@@ -412,7 +414,7 @@ describe('confirmPayment', () => {
     it('retries a transient failure and confirms within the deadline', async () => {
       const server = await serve([{ status: 429, body: 'rate limited' }, rpcResult(paymentTx())]);
 
-      const payment = await confirmPayment(SIGNATURE, { rpcUrl: server.url });
+      const payment = await confirmCharge(SIGNATURE);
 
       expect(payment.amountCents).toBe(500);
       expect(server.hits).toBe(2);
@@ -423,7 +425,7 @@ describe('confirmPayment', () => {
         { body: { jsonrpc: '2.0', id: 1, error: { code: -32005, message: 'node is behind' } } },
       ]);
       const error = await expectCode(
-        confirmPayment(SIGNATURE, { rpcUrl: server.url, timeoutMs: 0 }),
+        confirmCharge(SIGNATURE, { timeoutMs: 0 }),
         'rpc_error',
       );
       expect(error.message).toContain('node is behind');
@@ -432,7 +434,7 @@ describe('confirmPayment', () => {
     it('throws rpc_error on an invalid JSON body', async () => {
       const server = await serve([{ rawBody: 'not json' }]);
       await expectCode(
-        confirmPayment(SIGNATURE, { rpcUrl: server.url, timeoutMs: 0 }),
+        confirmCharge(SIGNATURE, { timeoutMs: 0 }),
         'rpc_error',
       );
     });
@@ -440,32 +442,21 @@ describe('confirmPayment', () => {
     it('throws rpc_error on a 200 body with neither result nor error', async () => {
       const server = await serve([{ body: { jsonrpc: '2.0', id: 1 } }]);
       await expectCode(
-        confirmPayment(SIGNATURE, { rpcUrl: server.url, timeoutMs: 0 }),
+        confirmCharge(SIGNATURE, { timeoutMs: 0 }),
         'rpc_error',
       );
     });
 
     it('throws rpc_error when the endpoint is unreachable', async () => {
-      await expectCode(
-        confirmPayment(SIGNATURE, { rpcUrl: 'http://127.0.0.1:1/', timeoutMs: 0 }),
-        'rpc_error',
-      );
+      process.env.SOLANA_RPC_URL = 'http://127.0.0.1:1/';
+      await expectCode(confirmCharge(SIGNATURE, { timeoutMs: 0 }), 'rpc_error');
     });
   });
 
   describe('configuration', () => {
-    it('reads the RPC URL from SOLANA_RPC_URL when no option is given', async () => {
-      const server = await serve([rpcResult(paymentTx())]);
-      process.env.SOLANA_RPC_URL = server.url;
-
-      const payment = await confirmPayment(SIGNATURE);
-
-      expect(payment.amountCents).toBe(500);
-    });
-
-    it('throws a plain configuration error when no RPC URL is available', async () => {
+    it('throws a plain configuration error when SOLANA_RPC_URL is unset', async () => {
       delete process.env.SOLANA_RPC_URL;
-      await expect(confirmPayment(SIGNATURE)).rejects.toThrow('SOLANA_RPC_URL');
+      await expect(confirmCharge(SIGNATURE)).rejects.toThrow('SOLANA_RPC_URL');
     });
   });
 });
