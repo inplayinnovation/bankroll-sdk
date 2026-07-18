@@ -60,6 +60,8 @@ ESM only. Types are bundled.
 
 **0.3.0 rename:** `bankroll.pay()` is now `bankroll.charge()` — same behavior, same signature. The server entry adds `confirmCharge` and `pay` (payouts).
 
+**0.4.0:** the payout lifecycle — `buildPayout` / `sendPayout` / `confirmPayout`, with `pay()` as their composition. Build returns the exact transaction bytes + `lastValidBlockHeight` so record-before-broadcast apps can persist both between steps; `confirmPayout` doubles as the reconciliation primitive for stuck payouts.
+
 ## License
 
 MIT

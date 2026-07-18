@@ -17,12 +17,17 @@ export {
 
 export {
   PayError,
+  buildPayout,
+  confirmPayout,
   keypairSigner,
   pay,
+  sendPayout,
+  type BuiltPayout,
+  type ConfirmPayoutOptions,
   type PayErrorCode,
   type PayInput,
-  type PayOptions,
   type PaymentSigner,
+  type PayoutOptions,
 } from './payouts';
 
 const ALG = 'RS256';

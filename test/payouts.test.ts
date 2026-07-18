@@ -13,7 +13,15 @@ import nacl from 'tweetnacl';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { BASE_UNITS_PER_CENT, HSUSD_DECIMALS, HSUSD_MINT } from '../src/charges';
-import { PayError, keypairSigner, pay, type PaymentSigner } from '../src/payouts';
+import {
+  PayError,
+  buildPayout,
+  confirmPayout,
+  keypairSigner,
+  pay,
+  sendPayout,
+  type PaymentSigner,
+} from '../src/payouts';
 
 const TREASURY = Keypair.generate();
 const TREASURY_SECRET = bs58.encode(TREASURY.secretKey);
@@ -428,6 +436,95 @@ describe('pay', () => {
     it('derives the address embedded in the secret key', () => {
       const signer = keypairSigner(TREASURY_SECRET);
       expect(signer.address).toBe(TREASURY.publicKey.toBase58());
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The lifecycle: buildPayout → sendPayout → confirmPayout
+  // -------------------------------------------------------------------------
+
+  describe('lifecycle', () => {
+    it('buildPayout returns the unsigned transaction and its expiry without broadcasting', async () => {
+      const server = await serve(happyHandlers());
+
+      const built = await buildPayout({ to: RECIPIENT.toBase58(), amountCents: 750, memo: 'o:1' });
+
+      expect(built.lastValidBlockHeight).toBe(LAST_VALID);
+      expect(built.blockhash).toBe(BLOCKHASH);
+      const tx = Transaction.from(Buffer.from(built.transaction, 'base64'));
+      expect(tx.feePayer?.toBase58()).toBe(TREASURY.publicKey.toBase58());
+      expect(tx.instructions).toHaveLength(3);
+      // Nothing sent, nothing confirmed — build is a pure read + assemble.
+      expect(server.requests.map((r) => r.method)).toEqual(['getLatestBlockhash']);
+    });
+
+    it('sendPayout hands the signer EXACTLY the built bytes (byte-identical replay)', async () => {
+      await serve(happyHandlers());
+      const built = await buildPayout({ to: RECIPIENT.toBase58(), amountCents: 750 });
+
+      let received: string | undefined;
+      const vendor = Keypair.generate();
+      const signer: PaymentSigner = {
+        address: TREASURY.publicKey.toBase58(),
+        sendTransaction: async (txBase64) => {
+          received = txBase64;
+          return bs58.encode(
+            nacl.sign.detached(Buffer.from(txBase64, 'base64').subarray(65), vendor.secretKey),
+          );
+        },
+      };
+      await sendPayout(built.transaction, { signer });
+
+      expect(received).toBe(built.transaction);
+    });
+
+    it('sendPayout resolves on broadcast without waiting for confirmation', async () => {
+      const server = await serve(happyHandlers());
+      const built = await buildPayout({ to: RECIPIENT.toBase58(), amountCents: 750 });
+
+      const { signature } = await sendPayout(built.transaction);
+
+      expect(bs58.decode(signature)).toHaveLength(64);
+      expect(server.requests.filter((r) => r.method === 'getSignatureStatuses')).toHaveLength(0);
+    });
+
+    it('confirmPayout resolves once the cluster confirms', async () => {
+      await serve(happyHandlers());
+      const built = await buildPayout({ to: RECIPIENT.toBase58(), amountCents: 750 });
+      const { signature } = await sendPayout(built.transaction);
+
+      await expect(
+        confirmPayout(signature, { lastValidBlockHeight: built.lastValidBlockHeight }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('confirmPayout is the reconciliation primitive: a stored dead signature resolves to expired', async () => {
+      await serve(
+        happyHandlers({
+          getSignatureStatuses: () => nullStatus,
+          getBlockHeight: () => LAST_VALID + 1,
+        }),
+      );
+
+      const error = await confirmPayout('StoredSignature1111111111111111111111111111111111111111111111111', {
+        lastValidBlockHeight: LAST_VALID,
+      }).catch((e: unknown) => e);
+
+      expect((error as PayError).code).toBe('expired');
+      expect((error as PayError).lastValidBlockHeight).toBe(LAST_VALID);
+    });
+
+    it('confirmPayout never applies the expiry fence without a lastValidBlockHeight', async () => {
+      const server = await serve(
+        happyHandlers({
+          getSignatureStatuses: (_params, hit) => (hit < 2 ? nullStatus : confirmedStatus),
+          getBlockHeight: () => LAST_VALID + 1,
+        }),
+      );
+
+      await confirmPayout('SomeSignature111111111111111111111111111111111111111111111111111');
+
+      expect(server.requests.filter((r) => r.method === 'getBlockHeight')).toHaveLength(0);
     });
   });
 });

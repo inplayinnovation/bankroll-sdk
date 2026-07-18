@@ -156,7 +156,13 @@ function defaultSigner(): PaymentSigner {
 }
 
 // ---------------------------------------------------------------------------
-// pay()
+// The payout lifecycle: buildPayout → sendPayout → confirmPayout.
+// pay() is their composition. Apps with record-before-broadcast machinery use
+// the steps directly: persist what buildPayout returns (the exact bytes and
+// their expiry) in the same write that locks the payout row, broadcast those
+// bytes with sendPayout — a recorded transaction replays byte-identically, so
+// wallet-service idempotency (same key + same body) holds across retries —
+// and confirm, or later re-confirm, with confirmPayout.
 // ---------------------------------------------------------------------------
 
 export interface PayInput {
@@ -168,73 +174,31 @@ export interface PayInput {
   memo?: string;
 }
 
-export interface PayOptions {
-  /** How to sign and broadcast. Default: keypairSigner(BANKROLL_TREASURY_KEY). */
+export interface PayoutOptions {
+  /** The treasury: signs and broadcasts. Default: keypairSigner(BANKROLL_TREASURY_KEY). */
   signer?: PaymentSigner;
 }
 
-type ConfirmStatus = 'confirmed' | 'failed' | 'expired' | 'unknown';
-
-async function awaitConfirmation(
-  connection: Connection,
-  signature: string,
-  lastValidBlockHeight: number,
-  applyExpiryFence: boolean,
-): Promise<ConfirmStatus> {
-  const deadline = Date.now() + CONFIRM_TIMEOUT_MS;
-  try {
-    while (Date.now() < deadline) {
-      const statuses = await connection.getSignatureStatuses([signature]);
-      const status = statuses.value[0];
-      if (status) {
-        // A result only counts once the cluster confirmed it — at 'processed'
-        // it may be a minority-fork verdict. Same gating stock
-        // confirmTransaction('confirmed') applies via its subscription.
-        if (
-          status.confirmationStatus === 'confirmed' ||
-          status.confirmationStatus === 'finalized'
-        ) {
-          return status.err ? 'failed' : 'confirmed';
-        }
-      } else if (applyExpiryFence) {
-        // Standard expiry semantics: once the finalized height passes
-        // lastValidBlockHeight, the transaction can never be processed. A
-        // landed transaction would have surfaced in the status polls above
-        // (the status cache spans the blockhash's entire validity window).
-        const finalizedHeight = await connection.getBlockHeight('finalized');
-        if (finalizedHeight > lastValidBlockHeight) return 'expired';
-      }
-      await new Promise((resolve) => setTimeout(resolve, CONFIRM_POLL_INTERVAL_MS));
-    }
-  } catch (cause) {
-    // The payout was already broadcast — an RPC failure here must not read as
-    // "nothing happened", so carry the signature for the caller's fence.
-    throw new PayError(
-      'rpc_error',
-      'confirmation check failed — the payout may have landed; check the signature',
-      {
-        signature,
-        ...(applyExpiryFence ? { lastValidBlockHeight } : {}),
-        cause,
-      },
-    );
-  }
-  return 'unknown';
+export interface BuiltPayout {
+  /** The unsigned wire transaction, base64. Persist verbatim; send verbatim. */
+  transaction: string;
+  /** The block height after which this transaction can never land. */
+  lastValidBlockHeight: number;
+  /** The recent blockhash the transaction is built on. */
+  blockhash: string;
 }
 
 /**
- * Pay a user: an HSUSD transfer from your treasury to `to`, confirmed before
- * it resolves. Throws PayError; a return value means the payout settled.
- *
- * Idempotency is yours: keep one payout row per settled order (UNIQUE), store
- * the returned signature, and on `confirmation_timeout` use the error's
- * signature + lastValidBlockHeight to check the outcome before retrying —
- * `expired` and `send_failed` are the only codes that guarantee nothing moved.
+ * Build the payout transaction without sending it: idiomatic ATA-create-if-
+ * needed + transferChecked + the caller's memo, on a fresh blockhash. Nothing
+ * is broadcast and nothing needs signing yet — record the result on your
+ * payout row before you send, and the send can always be retried or audited
+ * against exactly what was recorded.
  */
-export async function pay(
+export async function buildPayout(
   input: PayInput,
-  options?: PayOptions,
-): Promise<{ signature: string }> {
+  options?: PayoutOptions,
+): Promise<BuiltPayout> {
   const { to, amountCents } = input;
   if (!Number.isInteger(amountCents) || amountCents <= 0) {
     throw new Error('amountCents must be a positive integer');
@@ -312,10 +276,152 @@ export async function pay(
     );
   }
 
+  return {
+    transaction: wire.toString('base64'),
+    lastValidBlockHeight: latest.lastValidBlockHeight,
+    blockhash: latest.blockhash,
+  };
+}
+
+/**
+ * Sign and broadcast a built payout — EXACTLY the bytes given, unmodified, so
+ * a transaction recorded at build time replays byte-identically on retry.
+ * Resolves with the signature as soon as the broadcast is accepted; it does
+ * not wait for confirmation (that's confirmPayout's job).
+ */
+export async function sendPayout(
+  transaction: string,
+  options?: PayoutOptions,
+): Promise<{ signature: string }> {
+  const signer = options?.signer ?? defaultSigner();
+  const signature = await signer.sendTransaction(transaction);
+  return { signature };
+}
+
+export interface ConfirmPayoutOptions {
+  /**
+   * The transaction's expiry from buildPayout. When given, a payout that
+   * provably died (finalized height passed it, never landed) throws `expired`
+   * — the safe-to-retry signal. Omit it when the broadcast blockhash isn't
+   * yours to know (a sponsoring wallet service may have re-signed with a
+   * fresh one) and rely on `confirmation_timeout` + your service's
+   * idempotency instead.
+   */
+  lastValidBlockHeight?: number;
+}
+
+type ConfirmStatus = 'confirmed' | 'failed' | 'expired' | 'unknown';
+
+async function awaitConfirmation(
+  connection: Connection,
+  signature: string,
+  lastValidBlockHeight: number | undefined,
+): Promise<ConfirmStatus> {
+  const deadline = Date.now() + CONFIRM_TIMEOUT_MS;
+  try {
+    while (Date.now() < deadline) {
+      const statuses = await connection.getSignatureStatuses([signature]);
+      const status = statuses.value[0];
+      if (status) {
+        // A result only counts once the cluster confirmed it — at 'processed'
+        // it may be a minority-fork verdict. Same gating stock
+        // confirmTransaction('confirmed') applies via its subscription.
+        if (
+          status.confirmationStatus === 'confirmed' ||
+          status.confirmationStatus === 'finalized'
+        ) {
+          return status.err ? 'failed' : 'confirmed';
+        }
+      } else if (lastValidBlockHeight !== undefined) {
+        // Standard expiry semantics: once the finalized height passes
+        // lastValidBlockHeight, the transaction can never be processed. A
+        // landed transaction would have surfaced in the status polls above
+        // (the status cache spans the blockhash's entire validity window).
+        const finalizedHeight = await connection.getBlockHeight('finalized');
+        if (finalizedHeight > lastValidBlockHeight) return 'expired';
+      }
+      await new Promise((resolve) => setTimeout(resolve, CONFIRM_POLL_INTERVAL_MS));
+    }
+  } catch (cause) {
+    // The payout was already broadcast — an RPC failure here must not read as
+    // "nothing happened", so carry the signature for the caller's fence.
+    throw new PayError(
+      'rpc_error',
+      'confirmation check failed — the payout may have landed; check the signature',
+      {
+        signature,
+        ...(lastValidBlockHeight !== undefined ? { lastValidBlockHeight } : {}),
+        cause,
+      },
+    );
+  }
+  return 'unknown';
+}
+
+/**
+ * Wait for a broadcast payout's outcome. Resolves once the cluster confirms
+ * it; throws PayError otherwise (`failed_on_chain`, `expired` when
+ * lastValidBlockHeight was given and provably passed unused, or
+ * `confirmation_timeout` while the outcome is still unknown).
+ *
+ * Also the reconciliation primitive: re-run it any time against a stored
+ * signature + lastValidBlockHeight to resolve a payout row stuck in your
+ * "submitted" state to confirmed / failed / expired.
+ */
+export async function confirmPayout(
+  signature: string,
+  options?: ConfirmPayoutOptions,
+): Promise<void> {
+  const lastValidBlockHeight = options?.lastValidBlockHeight;
+  const status = await awaitConfirmation(getConnection(), signature, lastValidBlockHeight);
+  switch (status) {
+    case 'confirmed':
+      return;
+    case 'failed':
+      throw new PayError('failed_on_chain', `payout ${signature} failed on-chain`, { signature });
+    case 'expired':
+      throw new PayError('expired', `payout ${signature} expired unused — safe to retry`, {
+        signature,
+        ...(lastValidBlockHeight !== undefined ? { lastValidBlockHeight } : {}),
+      });
+    case 'unknown':
+      throw new PayError(
+        'confirmation_timeout',
+        `payout ${signature} was broadcast but its outcome is unknown — ` +
+          'check the signature before retrying',
+        {
+          signature,
+          ...(lastValidBlockHeight !== undefined ? { lastValidBlockHeight } : {}),
+        },
+      );
+  }
+}
+
+/**
+ * Pay a user: an HSUSD transfer from your treasury to `to`, confirmed before
+ * it resolves. Throws PayError; a return value means the payout settled at
+ * cluster commitment (not absolute finality — no success status anywhere in
+ * payments is; see the docs on reconciliation).
+ *
+ * This is the composition buildPayout → sendPayout → confirmPayout in one
+ * call, for apps without their own payout bookkeeping between the steps.
+ * Idempotency is yours either way: keep one payout row per settled order
+ * (UNIQUE), store the returned signature, and on `confirmation_timeout` use
+ * the error's signature + lastValidBlockHeight to check the outcome before
+ * retrying — `expired` and `send_failed` are the only codes that guarantee
+ * nothing moved.
+ */
+export async function pay(
+  input: PayInput,
+  options?: PayoutOptions,
+): Promise<{ signature: string }> {
+  const signer = options?.signer ?? defaultSigner();
+  const built = await buildPayout(input, { signer });
   const ownSigner = ownSigners.has(signer);
+
   let signature: string;
   try {
-    signature = await signer.sendTransaction(wire.toString('base64'));
+    ({ signature } = await sendPayout(built.transaction, { signer }));
   } catch (error) {
     // For the SDK's own signer the broadcast blockhash is known — enrich a
     // broadcast-outcome-unknown error with the fence datum the caller needs.
@@ -327,40 +433,18 @@ export async function pay(
     ) {
       throw new PayError(error.code, error.message, {
         signature: error.signature,
-        lastValidBlockHeight: latest.lastValidBlockHeight,
+        lastValidBlockHeight: built.lastValidBlockHeight,
         cause: error.cause,
       });
     }
     throw error;
   }
 
-  const status = await awaitConfirmation(
-    connection,
+  // Only the default signer's blockhash is known; a custom signer may have
+  // re-signed with a fresher one, so no expiry bound is claimed for it.
+  await confirmPayout(
     signature,
-    latest.lastValidBlockHeight,
-    ownSigner,
+    ownSigner ? { lastValidBlockHeight: built.lastValidBlockHeight } : {},
   );
-  switch (status) {
-    case 'confirmed':
-      return { signature };
-    case 'failed':
-      throw new PayError('failed_on_chain', `payout ${signature} failed on-chain`, { signature });
-    case 'expired':
-      throw new PayError('expired', `payout ${signature} expired unused — safe to retry`, {
-        signature,
-        lastValidBlockHeight: latest.lastValidBlockHeight,
-      });
-    case 'unknown':
-      throw new PayError(
-        'confirmation_timeout',
-        `payout ${signature} was broadcast but its outcome is unknown — ` +
-          'check the signature before retrying',
-        {
-          signature,
-          // Only the default signer's blockhash is known; a custom signer may
-          // have re-signed with a fresher one, so no bound is claimed.
-          ...(ownSigner ? { lastValidBlockHeight: latest.lastValidBlockHeight } : {}),
-        },
-      );
-  }
+  return { signature };
 }
