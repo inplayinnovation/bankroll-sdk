@@ -6,9 +6,11 @@
 // never blind-retry a timed-out send (the thrown error carries what you need
 // to fence: the signature and lastValidBlockHeight).
 //
-// Solana mechanics come from @solana/web3.js + @solana/spl-token, pinned to
-// EXACT versions (no ranges) — this entry sits next to treasury key material,
-// so a newly published package version must never flow in via a range.
+// Solana mechanics come from @solana/web3.js, pinned to an EXACT version (no
+// ranges) — this entry sits next to treasury key material, so a newly
+// published package version must never flow in via a range. The three SPL
+// Token instructions are in ./spl-token, which explains why they aren't
+// imported from @solana/spl-token.
 import {
   Connection,
   Keypair,
@@ -18,14 +20,14 @@ import {
   Transaction,
   TransactionInstruction,
 } from '@solana/web3.js';
+import bs58 from 'bs58';
+
+import { BASE_UNITS_PER_CENT, HSUSD_DECIMALS, HSUSD_MINT } from './charges';
 import {
   createAssociatedTokenAccountIdempotentInstruction,
   createTransferCheckedInstruction,
   getAssociatedTokenAddressSync,
-} from '@solana/spl-token';
-import bs58 from 'bs58';
-
-import { BASE_UNITS_PER_CENT, HSUSD_DECIMALS, HSUSD_MINT } from './charges';
+} from './spl-token';
 
 const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
 

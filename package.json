@@ -1,6 +1,6 @@
 {
   "name": "@joinbankroll/sdk",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Build on Bankroll — typed client for the window.bankroll bridge, plus server-side session verification, charge confirmation, and payouts",
   "license": "MIT",
   "repository": {
@@ -36,7 +36,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@solana/spl-token": "0.4.15",
     "@solana/web3.js": "1.98.4",
     "bs58": "6.0.0",
     "jose": "^6.0.0"
@@ -51,11 +50,15 @@
   },
   "devDependencies": {
     "@privy-io/node": "^0.10.1",
+    "@solana/spl-token": "^0.4.15",
     "@types/node": "^24.0.0",
     "happy-dom": "^18.0.0",
     "tsup": "^8.0.0",
     "tweetnacl": "^1.0.3",
     "typescript": "^5.5.0",
     "vitest": "^3.0.0"
+  },
+  "overrides": {
+    "uuid": "^11.0.0"
   }
 }
