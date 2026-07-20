@@ -52,6 +52,14 @@ export interface ConfirmedCharge {
    * can carry anything, so treat it as untrusted, unbounded input.
    */
   memo: string | null;
+  /**
+   * The slot the transaction landed in — a monotonic, chain-assigned sequence
+   * number. Useful as an ordering key: unlike a timestamp you record, it is a
+   * property of the transaction, so every confirmation of the same signature
+   * yields the same slot. Storing a purchase under a slot-derived key makes a
+   * listing time-ordered without giving up signature-keyed idempotency.
+   */
+  slot: number;
 }
 
 export interface ConfirmChargeOptions {
@@ -76,6 +84,7 @@ interface RpcInstruction {
 }
 
 interface RpcTransaction {
+  slot: number;
   meta: {
     err: unknown;
     preTokenBalances?: RpcTokenBalance[];
@@ -238,5 +247,6 @@ export async function confirmCharge(
         ? Number(units / BASE_UNITS_PER_CENT)
         : Number(units) / Number(BASE_UNITS_PER_CENT),
     memo: extractMemo(parsed),
+    slot: parsed.slot,
   };
 }

@@ -168,6 +168,7 @@ describe('confirmCharge', () => {
       payee: PAYEE,
       amountCents: 500,
       memo: 'order:1234',
+      slot: 34567,
     });
   });
 
@@ -190,6 +191,14 @@ describe('confirmCharge', () => {
     const server = await serve([rpcResult(paymentTx())]);
     const payment = await confirmCharge(SIGNATURE);
     expect(payment.memo).toBeNull();
+  });
+
+  it('reports the slot the transaction landed in', async () => {
+    // A chain-assigned ordering key — a caller stores a purchase under it so a
+    // listing is time-ordered without giving up signature-keyed idempotency.
+    const server = await serve([rpcResult(paymentTx())]);
+    const payment = await confirmCharge(SIGNATURE);
+    expect(payment.slot).toBe(34567);
   });
 
   it('finds a memo emitted from a CPI inner instruction (smart-contract wallets)', async () => {
