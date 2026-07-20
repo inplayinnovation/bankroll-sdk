@@ -514,6 +514,32 @@ describe('pay', () => {
       expect((error as PayError).lastValidBlockHeight).toBe(LAST_VALID);
     });
 
+    it('finds a payout that landed outside the recent status cache', async () => {
+      // The reconciliation case. getSignatureStatuses reads only the recent
+      // status cache unless asked to search the ledger, so an old signature
+      // answers null however it ended — and the expiry fence below would then
+      // call a landed payout dead and report it safe to retry.
+      //
+      // This node models that: nothing without searchTransactionHistory, the
+      // real status with it.
+      await serve(
+        happyHandlers({
+          getSignatureStatuses: (params) =>
+            (params[1] as { searchTransactionHistory?: boolean } | undefined)
+              ?.searchTransactionHistory
+              ? confirmedStatus
+              : nullStatus,
+          getBlockHeight: () => LAST_VALID + 1,
+        }),
+      );
+
+      await expect(
+        confirmPayout('StoredSignature1111111111111111111111111111111111111111111111111', {
+          lastValidBlockHeight: LAST_VALID,
+        }),
+      ).resolves.toBeUndefined();
+    });
+
     it('confirmPayout never applies the expiry fence without a lastValidBlockHeight', async () => {
       const server = await serve(
         happyHandlers({

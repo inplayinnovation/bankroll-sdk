@@ -308,6 +308,12 @@ export interface ConfirmPayoutOptions {
    * yours to know (a sponsoring wallet service may have re-signed with a
    * fresh one) and rely on `confirmation_timeout` + your service's
    * idempotency instead.
+   *
+   * Confirmation searches the ledger, not just the recent status cache, so a
+   * payout that landed long ago is still found. The limit is your RPC's own
+   * history retention — a heavily pruned endpoint can answer nothing for an
+   * old landed transaction, which would read as `expired`. Use an endpoint
+   * with real transaction history if you reconcile days-old payouts.
    */
   lastValidBlockHeight?: number;
 }
@@ -322,7 +328,16 @@ async function awaitConfirmation(
   const deadline = Date.now() + CONFIRM_TIMEOUT_MS;
   try {
     while (Date.now() < deadline) {
-      const statuses = await connection.getSignatureStatuses([signature]);
+      // searchTransactionHistory is required here, not an optimisation.
+      // Without it this RPC reads only the recent status cache — active slots
+      // plus MAX_RECENT_BLOCKHASHES rooted ones, roughly two minutes. That is
+      // enough while a payout is being confirmed inline, but confirmPayout is
+      // also the reconciliation primitive, called against a signature from
+      // minutes or days ago. There a landed payout returns no status at all,
+      // which is indistinguishable from one that never existed.
+      const statuses = await connection.getSignatureStatuses([signature], {
+        searchTransactionHistory: true,
+      });
       const status = statuses.value[0];
       if (status) {
         // A result only counts once the cluster confirmed it — at 'processed'
@@ -337,8 +352,13 @@ async function awaitConfirmation(
       } else if (lastValidBlockHeight !== undefined) {
         // Standard expiry semantics: once the finalized height passes
         // lastValidBlockHeight, the transaction can never be processed. A
-        // landed transaction would have surfaced in the status polls above
-        // (the status cache spans the blockhash's entire validity window).
+        // landed transaction would have surfaced in the status polls above,
+        // which search the ledger rather than only the recent cache — so no
+        // status here means it never landed, however long ago it was sent.
+        //
+        // The floor on that is the RPC's own history retention: a heavily
+        // pruned node can still answer nothing for an old landed transaction,
+        // so `expired` is as trustworthy as the endpoint behind it.
         const finalizedHeight = await connection.getBlockHeight('finalized');
         if (finalizedHeight > lastValidBlockHeight) return 'expired';
       }
