@@ -1,6 +1,7 @@
-// Server-side payouts: pay() sends HSUSD from the app's treasury to a user's
-// wallet. The SDK owns the mechanics — transaction build (transferChecked +
-// idempotent recipient-ATA create + optional memo), signing, broadcast, and
+// Server-side payouts: pay() sends HSUSD — or an app's own declared token —
+// from the app's treasury to a user's wallet. The SDK owns the mechanics —
+// transaction build (transferChecked + idempotent recipient-ATA create +
+// optional memo), signing, broadcast, and
 // confirmation — while idempotency is deliberately the caller's duty: keep one
 // payout row per settled order (UNIQUE), store the returned signature, and
 // never blind-retry a timed-out send (the thrown error carries what you need
@@ -174,6 +175,12 @@ export interface PayInput {
   amountCents: number;
   /** Optional on-chain label for the payout. */
   memo?: string;
+  /**
+   * Mint to pay in. Defaults to HSUSD; name one of your own `appTokens` mints
+   * to pay out that token instead. It must be HSUSD-shaped — 9 decimals, one
+   * token to the dollar.
+   */
+  token?: string;
 }
 
 export interface PayoutOptions {
@@ -219,7 +226,12 @@ export async function buildPayout(
         'payouts require a keypair-backed treasury that can sign directly',
     );
   }
-  const mint = new PublicKey(HSUSD_MINT);
+  let mint: PublicKey;
+  try {
+    mint = new PublicKey(input.token ?? HSUSD_MINT);
+  } catch (cause) {
+    throw new Error(`token is not a valid mint address: ${input.token}`, { cause });
+  }
   const treasuryAta = getAssociatedTokenAddressSync(mint, treasury);
   // Smart-contract wallets are off-curve owners; they are still payable.
   const recipientAta = getAssociatedTokenAddressSync(mint, recipient, true);
@@ -247,6 +259,9 @@ export async function buildPayout(
       recipientAta,
       treasury,
       BigInt(amountCents) * BASE_UNITS_PER_CENT,
+      // Every app token shares HSUSD's scale, so one conversion serves them
+      // all. transferChecked verifies this on-chain: a token minted at another
+      // scale fails the transfer rather than moving the wrong amount.
       HSUSD_DECIMALS,
     ),
   );

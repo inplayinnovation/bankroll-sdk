@@ -166,6 +166,7 @@ describe('confirmCharge', () => {
     expect(payment).toEqual({
       payer: PAYER,
       payee: PAYEE,
+      mint: HSUSD_MINT,
       amountCents: 500,
       memo: 'order:1234',
       slot: 34567,
@@ -328,24 +329,6 @@ describe('confirmCharge', () => {
       await expectCode(confirmCharge(SIGNATURE), 'not_a_payment');
     });
 
-    it('throws not_a_payment when only another mint moved', async () => {
-      const server = await serve([
-        rpcResult(
-          paymentTx({
-            pre: [
-              { owner: PAYER, amount: cents(500), mint: OTHER_MINT },
-              { owner: PAYEE, amount: '0', mint: OTHER_MINT },
-            ],
-            post: [
-              { owner: PAYER, amount: '0', mint: OTHER_MINT },
-              { owner: PAYEE, amount: cents(500), mint: OTHER_MINT },
-            ],
-          }),
-        ),
-      ]);
-      await expectCode(confirmCharge(SIGNATURE), 'not_a_payment');
-    });
-
     it('throws not_a_payment when more than one wallet was credited', async () => {
       const server = await serve([
         rpcResult(
@@ -411,6 +394,61 @@ describe('confirmCharge', () => {
     });
   });
 
+  describe('app tokens', () => {
+    // The asset is reported, never judged: the caller checks `mint` alongside
+    // payee, amountCents and payer. An app token costs its issuer nothing, so a
+    // server that skips that check releases HSUSD-priced value for free.
+    const appTokenTx = (units = cents(500)) =>
+      paymentTx({
+        pre: [
+          { owner: PAYER, amount: units, mint: OTHER_MINT },
+          { owner: PAYEE, amount: '0', mint: OTHER_MINT },
+        ],
+        post: [
+          { owner: PAYER, amount: '0', mint: OTHER_MINT },
+          { owner: PAYEE, amount: units, mint: OTHER_MINT },
+        ],
+      });
+
+    it('reports the mint that paid, so a caller can branch on the asset', async () => {
+      const server = await serve([rpcResult(paymentTx())]);
+      const payment = await confirmCharge(SIGNATURE);
+      expect(payment.mint).toBe(HSUSD_MINT);
+    });
+
+    it('reports an app-token charge with the mint that settled it', async () => {
+      const server = await serve([rpcResult(appTokenTx())]);
+
+      const payment = await confirmCharge(SIGNATURE);
+
+      expect(payment.mint).toBe(OTHER_MINT);
+      expect(payment.amountCents).toBe(500);
+    });
+
+    it('refuses a transaction moving two assets at once as ambiguous', async () => {
+      const server = await serve([
+        rpcResult(
+          paymentTx({
+            pre: [
+              { owner: PAYER, amount: cents(500) },
+              { owner: PAYEE, amount: '0' },
+              { owner: PAYER, amount: cents(500), mint: OTHER_MINT },
+              { owner: PAYEE, amount: '0', mint: OTHER_MINT },
+            ],
+            post: [
+              { owner: PAYER, amount: '0' },
+              { owner: PAYEE, amount: cents(500) },
+              { owner: PAYER, amount: '0', mint: OTHER_MINT },
+              { owner: PAYEE, amount: cents(500), mint: OTHER_MINT },
+            ],
+          }),
+        ),
+      ]);
+      await expectCode(confirmCharge(SIGNATURE), 'not_a_payment');
+    });
+
+  });
+
   describe('rpc failures', () => {
     it('throws rpc_error on a non-200 response once the deadline passes', async () => {
       const server = await serve([{ status: 500, body: 'oops' }]);
@@ -469,3 +507,4 @@ describe('confirmCharge', () => {
     });
   });
 });
+

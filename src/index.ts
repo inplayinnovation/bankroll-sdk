@@ -317,12 +317,20 @@ export type ChargeInput = {
    * Max 255 characters; retained 24h, scoped to this app and user.
    */
   idempotencyKey?: string;
+  /**
+   * Mint to charge in. Defaults to HSUSD; name one of your own `appTokens`
+   * mints to charge that token instead. The host settles a token charge only
+   * when your manifest declares that mint, and your server must still branch on
+   * the `mint` confirmCharge() reports before releasing value.
+   */
+  token?: string;
 };
 
 interface BridgePayload {
   amountCents: number;
   idempotencyKey: string;
   memo?: string;
+  token?: string;
 }
 
 // Charge the user's Bankroll balance; resolves with the settled transfer's
@@ -344,6 +352,7 @@ async function charge(input: ChargeInput): Promise<string> {
   };
   const memo = input.memo?.trim().slice(0, MEMO_MAX_LENGTH);
   if (memo) payload.memo = memo;
+  if (input.token !== undefined) payload.token = input.token;
   try {
     return await bridge.pay(payload);
   } catch (error) {
@@ -400,7 +409,12 @@ declare global {
       session?(options?: { identity?: boolean }): Promise<string>;
       /** @deprecated Older hosts expose this; session() supersedes it. */
       identity?(): Promise<string>;
-      pay(input: { amountCents: number; memo?: string; idempotencyKey?: string }): Promise<string>;
+      pay(input: {
+        amountCents: number;
+        memo?: string;
+        idempotencyKey?: string;
+        token?: string;
+      }): Promise<string>;
     };
     // Legacy marker set by older Bankroll app builds — a presence-only signal
     // used to tell an out-of-date app apart from a standalone browser.

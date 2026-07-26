@@ -1,9 +1,9 @@
 // Server-side confirmation of a settled charge. `bankroll.charge()` resolves
 // with the settled transfer's signature; this module fetches that transaction
 // from the app's own Solana RPC and returns the charge's facts — who paid whom,
-// how much, and the memo. Comparing those facts to the order, and storing the
-// signature against replay, is deliberately left to the app: the SDK observes,
-// the app decides.
+// in what asset, how much, and the memo. Comparing those facts to the order,
+// and storing the signature against replay, is deliberately left to the app:
+// the SDK observes, the app decides.
 
 export const HSUSD_MINT = '4FVaHEubcqws8hKwJSiW8f8CmKGUyMsBxTKUytcGdRvd';
 export const HSUSD_DECIMALS = 9;
@@ -25,7 +25,7 @@ const MIN_ATTEMPT_TIMEOUT_MS = 1_000;
 export type ConfirmChargeErrorCode =
   | 'not_found' // never became visible before the deadline
   | 'failed_on_chain' // the transaction landed but failed
-  | 'not_a_payment' // no lone HSUSD payer→payee transfer in the transaction
+  | 'not_a_payment' // no lone payer→payee transfer, in an accepted asset, in the transaction
   | 'rpc_error'; // the RPC endpoint kept failing or answered malformed until the deadline
 
 export class ConfirmChargeError extends Error {
@@ -39,10 +39,16 @@ export class ConfirmChargeError extends Error {
 }
 
 export interface ConfirmedCharge {
-  /** Wallet the HSUSD left. Compare to your verified session's `user.wallet`. */
+  /** Wallet the funds left. Compare to your verified session's `user.wallet`. */
   payer: string;
-  /** Wallet the HSUSD arrived at. Compare to your `capabilities.payments` address. */
+  /** Wallet the funds arrived at. Compare to your `capabilities.payments` address. */
   payee: string;
+  /**
+   * The mint that actually paid. ALWAYS check this before releasing value: an
+   * app token is money the app minted for nothing, so a charge settled in one
+   * must never release something priced in HSUSD.
+   */
+  mint: string;
   /** Amount received, in US cents. Fractional only if the transfer wasn't whole cents. */
   amountCents: number;
   /**
@@ -141,22 +147,30 @@ async function fetchTransaction(
   return body.result ?? null;
 }
 
-// Net HSUSD movement per owning wallet, summed across all of an owner's token
-// accounts. Balance deltas are net of everything in the transaction — including
-// transfers executed inside program calls (smart-contract wallets), which
-// instruction-walking would miss.
-function hsusdDeltasByOwner(meta: NonNullable<RpcTransaction['meta']>): Map<string, bigint> {
-  const deltas = new Map<string, bigint>();
+// Net movement per (mint, owner). Balance deltas are net of everything in the
+// transaction — including transfers executed inside program calls
+// (smart-contract wallets), which instruction-walking would miss. Keying by
+// mint as well as owner is what keeps two different assets in one transaction
+// from being summed into each other.
+function movementsByMint(
+  meta: NonNullable<RpcTransaction['meta']>,
+): Map<string, Map<string, bigint>> {
+  const movements = new Map<string, Map<string, bigint>>();
   const add = (balances: RpcTokenBalance[] | undefined, sign: bigint) => {
     for (const balance of balances ?? []) {
-      if (balance.mint !== HSUSD_MINT || !balance.owner) continue;
+      if (!balance.owner) continue;
+      let deltas = movements.get(balance.mint);
+      if (!deltas) {
+        deltas = new Map();
+        movements.set(balance.mint, deltas);
+      }
       const delta = sign * BigInt(balance.uiTokenAmount.amount);
       deltas.set(balance.owner, (deltas.get(balance.owner) ?? 0n) + delta);
     }
   };
   add(meta.preTokenBalances, -1n);
   add(meta.postTokenBalances, 1n);
-  return deltas;
+  return movements;
 }
 
 // The memo can sit in a CPI inner instruction when a smart-contract wallet
@@ -181,9 +195,15 @@ function extractMemo(parsed: RpcTransaction): string | null {
  * ConfirmChargeError — a return value means the transfer settled on-chain.
  *
  * The facts are yours to check before releasing value: `payee` must be your
- * payment address, `amountCents` must match the order, `payer` must match the
- * session's wallet — and store the signature (it's unique per charge) so the
- * same charge can't be redeemed twice.
+ * payment address, `mint` must be the asset you priced the order in,
+ * `amountCents` must match the order, `payer` must match the session's wallet —
+ * and store the signature (it's unique per charge) so the same charge can't be
+ * redeemed twice.
+ *
+ * The `mint` check is not optional. The signature is supplied by the client, so
+ * anything settled on-chain reaches here — including a worthless token the
+ * sender minted themselves and transferred straight to your address. It passes
+ * every other check.
  */
 export async function confirmCharge(
   tx: string,
@@ -223,7 +243,21 @@ export async function confirmCharge(
     throw new ConfirmChargeError('not_a_payment', `transaction ${tx} has no balance metadata`);
   }
 
-  const deltas = hsusdDeltasByOwner(parsed.meta);
+  // One transaction, one asset: two mints moving at once is ambiguous about
+  // which one was the payment, so it is refused rather than resolved by
+  // picking one.
+  const movements = [...movementsByMint(parsed.meta)].filter(([, deltas]) =>
+    [...deltas.values()].some((delta) => delta !== 0n),
+  );
+  const moved = movements[0];
+  if (movements.length !== 1 || !moved) {
+    throw new ConfirmChargeError(
+      'not_a_payment',
+      `transaction ${tx} does not move exactly one asset (${movements.length} moved)`,
+    );
+  }
+  const [mint, deltas] = moved;
+
   const credits = [...deltas].filter(([, delta]) => delta > 0n);
   const debits = [...deltas].filter(([, delta]) => delta < 0n);
   const credit = credits[0];
@@ -231,7 +265,7 @@ export async function confirmCharge(
   if (credits.length !== 1 || debits.length !== 1 || !credit || !debit) {
     throw new ConfirmChargeError(
       'not_a_payment',
-      `transaction ${tx} is not a single HSUSD payer→payee transfer ` +
+      `transaction ${tx} is not a single ${mint} payer→payee transfer ` +
         `(${debits.length} debited, ${credits.length} credited)`,
     );
   }
@@ -242,6 +276,7 @@ export async function confirmCharge(
   return {
     payer: debit[0],
     payee: credit[0],
+    mint,
     amountCents:
       units % BASE_UNITS_PER_CENT === 0n
         ? Number(units / BASE_UNITS_PER_CENT)
