@@ -17,6 +17,8 @@ export {
 
 export { PUBLIC_MAINNET_RPC, rpcUrl, usingPublicRpc } from './rpc';
 
+export { requireTreasury, treasuryAddress, treasurySigner } from './treasury';
+
 export {
   PayError,
   buildPayout,

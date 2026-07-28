@@ -6,6 +6,9 @@
 // is the only thing that signs. This module never touches a wallet — it only
 // brokers the two capabilities (session, charge) and normalises the host's
 // machine-readable rejection reasons into typed BankrollError codes.
+import { BANKROLL_TOKEN_HEADER } from './constants';
+
+export { BANKROLL_TOKEN_HEADER };
 
 // The lowest window.bankroll.version this SDK can talk to. Below it (or a
 // non-numeric version) the host is too old and the caller should prompt to
@@ -21,9 +24,6 @@ const TOKEN_REFRESH_MARGIN_MS = 60_000;
 const MEMO_MAX_LENGTH = 80;
 
 const SECONDS_TO_MS = 1000;
-
-// The header the server reads the session token from.
-export const BANKROLL_TOKEN_HEADER = 'x-bankroll-token';
 
 const PLAY_LINK_BASE = 'https://joinbankroll.com/play?url=';
 const HTTPS_PROTOCOL = 'https:';
