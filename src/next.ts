@@ -23,11 +23,19 @@ import { verifyToken, type BankrollSession } from './server';
  * answer is only knowable from a request, and guessing it would mint session
  * audiences and manifest `sub` claims for an origin the app isn't being served
  * from.
+ *
+ * Every route that reaches this must therefore opt out of prerendering with
+ * `export const dynamic = 'force-dynamic'`. The SDK cannot declare that for
+ * you — Next only reads it from the route file itself.
  */
 export async function getOrigin(): Promise<string> {
   const host = (await headers()).get('host');
   if (!host) {
-    throw new Error('getOrigin() requires a request — no host header is present');
+    throw new Error(
+      "getOrigin() found no host header, so it is being called outside a request. " +
+        "Add `export const dynamic = 'force-dynamic'` to this route: it is built from " +
+        'the request, so it cannot be prerendered.',
+    );
   }
   // A tunnel and a deployment are both https; only a local dev server isn't.
   const protocol = host.startsWith('localhost') || host.startsWith('127.0.0.1') ? 'http' : 'https';

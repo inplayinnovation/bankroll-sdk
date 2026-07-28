@@ -61,7 +61,14 @@ describe('getOrigin', () => {
   // origin the app is not being served from, so this fails loudly instead.
   it('throws outside a request rather than guessing', async () => {
     state.host = null;
-    await expect(getOrigin()).rejects.toThrow('requires a request');
+    await expect(getOrigin()).rejects.toThrow('outside a request');
+  });
+
+  // The only way to reach the throw in a real app is a prerendered route, so
+  // the error has to name the fix rather than leave it to be worked out.
+  it('names force-dynamic as the fix', async () => {
+    state.host = null;
+    await expect(getOrigin()).rejects.toThrow("dynamic = 'force-dynamic'");
   });
 });
 

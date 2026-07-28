@@ -4,3 +4,6 @@ dist/
 
 # Local pack artifacts — `npm pack` output, never committed.
 *.tgz
+
+# Local secrets — the throwaway Blob token the conformance tests use.
+.env*.local
