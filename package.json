@@ -44,10 +44,14 @@
     "./store/vercel": {
       "types": "./dist/store/vercel.d.ts",
       "import": "./dist/store/vercel.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
     }
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/verify-build.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -59,7 +63,8 @@
   "peerDependencies": {
     "@privy-io/node": "^0.10.1",
     "@vercel/blob": "^2.0.0",
-    "next": ">=15"
+    "next": ">=15",
+    "react": ">=18"
   },
   "peerDependenciesMeta": {
     "@privy-io/node": {
@@ -70,15 +75,22 @@
     },
     "@vercel/blob": {
       "optional": true
+    },
+    "react": {
+      "optional": true
     }
   },
   "devDependencies": {
     "@privy-io/node": "^0.10.1",
     "@solana/spl-token": "^0.4.15",
     "@types/node": "^24.0.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "@vercel/blob": "^2.6.1",
     "happy-dom": "^18.0.0",
     "next": "^16.2.12",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "tsup": "^8.0.0",
     "tweetnacl": "^1.0.3",
     "typescript": "^5.5.0",

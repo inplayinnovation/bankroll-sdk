@@ -13,8 +13,31 @@
  */
 export const PUBLIC_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 
-/** The endpoint actually in use, public default included. */
-export const rpcUrl = (): string => process.env.SOLANA_RPC_URL || PUBLIC_MAINNET_RPC;
+// Warned at most once per process: this is a standing condition, not a
+// per-request event, and a line per payout would be noise nobody reads.
+let warned = false;
+
+/**
+ * The endpoint actually in use, public default included.
+ *
+ * Falling back is deliberate — an app should take its first payment without
+ * configuring an RPC — but it is not silent. The public endpoint rate-limits
+ * under concurrency, and a 429 while broadcasting a payout surfaces as
+ * PayError('rpc_error') with an unknown outcome, which is the one failure a
+ * caller cannot safely retry. Anything taking real money wants its own endpoint.
+ */
+export const rpcUrl = (): string => {
+  const configured = process.env.SOLANA_RPC_URL;
+  if (configured) return configured;
+  if (!warned) {
+    warned = true;
+    console.warn(
+      '[bankroll] SOLANA_RPC_URL is not set — using the public Solana endpoint, ' +
+        'which is rate-limited and not meant for production traffic.',
+    );
+  }
+  return PUBLIC_MAINNET_RPC;
+};
 
 /**
  * Whether the default is in play. Worth surfacing to a developer — the public

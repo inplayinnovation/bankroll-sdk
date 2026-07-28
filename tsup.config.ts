@@ -6,6 +6,7 @@ export default defineConfig({
     'src/server.ts',
     'src/privy.ts',
     'src/next.ts',
+    'src/react.tsx',
     'src/store/index.ts',
     'src/store/fs.ts',
     'src/store/vercel.ts',
