@@ -69,17 +69,19 @@ function withLock<T>(file: string, work: () => Promise<T>): Promise<T> {
  * A filesystem-backed store rooted at `root`, defaulting to `storeDirectory()`
  * under the current working directory.
  *
- * The root is resolved per call rather than at import, so nothing is frozen
- * before a process has finished deciding its environment.
+ * The root is resolved once, when this is called — not at import, and not per
+ * operation. Import time is too early: it freezes NODE_ENV and the working
+ * directory before a process has finished deciding either. Per operation is too
+ * late: a single read-modify-write could then read from one store and write to
+ * another if the environment moved underneath it.
  */
 export function fsBackend(root?: string): StoreBackend {
-  const rootOf = () => resolve(process.cwd(), root ?? storeDirectory());
+  const base = resolve(process.cwd(), root ?? storeDirectory());
 
   // Paths are built from wallet addresses and transaction signatures. Those are
   // base58 today, but a traversal here would let a caller write anywhere on the
   // developer's disk, so containment is checked rather than assumed.
   function fileFor(pathname: string): string {
-    const base = rootOf();
     const file = resolve(base, pathname);
     if (file !== base && !file.startsWith(base + '/')) {
       throw new Error(`refusing to store outside ${base}: ${pathname}`);
