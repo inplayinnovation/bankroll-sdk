@@ -63,7 +63,7 @@
   },
   "peerDependencies": {
     "@privy-io/node": "^0.10.1",
-    "@vercel/blob": "^2.0.0",
+    "@vercel/blob": "^2.3.0",
     "next": ">=15",
     "react": ">=18"
   },
