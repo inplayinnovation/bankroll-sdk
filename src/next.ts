@@ -106,10 +106,42 @@ export interface ManifestApp {
    * so an app that hasn't finished setup advertises what it can actually honor.
    */
   payments: () => string | null;
-  /** The app's own token mint, if it issues one. */
-  tokenMint?: () => string | null;
-  /** What to call that token. Defaults to "<name> Tokens". */
-  tokenName?: () => string;
+  /**
+   * The tokens this app issues, keyed by mint address.
+   *
+   * Declaring a mint is what permits a charge to settle in it: the host lets an
+   * app charge HSUSD or the mints it declares, and nothing else, so a hijacked
+   * page can never reach a user's unrelated holdings.
+   *
+   * An app may issue several, and each carries its own display strings — which
+   * is why this is a map rather than a single mint. Both `name` and
+   * `description` are optional, but a present one must be a non-empty string.
+   */
+  appTokens?: () => AppTokens;
+}
+
+export interface AppToken {
+  name?: string;
+  description?: string;
+}
+
+export type AppTokens = Record<string, AppToken>;
+
+/**
+ * Drop entries the host would reject rather than serving a manifest it refuses
+ * to parse — an empty string is invalid for either field, and one bad entry
+ * takes the whole manifest down with it.
+ */
+function usableTokens(tokens: AppTokens): AppTokens {
+  const usable: AppTokens = {};
+  for (const [mint, token] of Object.entries(tokens)) {
+    if (!mint) continue;
+    usable[mint] = {
+      ...(token?.name ? { name: token.name } : {}),
+      ...(token?.description ? { description: token.description } : {}),
+    };
+  }
+  return usable;
 }
 
 const MANIFEST_VERSION = 1;
@@ -131,25 +163,15 @@ export function manifestRoute(app: ManifestApp): () => Promise<Response> {
   return async function GET(): Promise<Response> {
     const name = app.name();
     const payments = app.payments();
-    const tokenMint = app.tokenMint?.() ?? null;
+    const appTokens = usableTokens(app.appTokens?.() ?? {});
 
     // An unsecured JWT (alg: none, empty signature) — the origin it is served
     // from is the proof, not a signature.
     const header = { alg: 'none', typ: 'bankroll-app-manifest+jwt' };
     const payload = {
-      // Declaring a mint is what permits a charge to settle in it: the host lets
-      // this app charge HSUSD or these, and nothing else, so a hijacked page can
-      // never reach a user's unrelated holdings. Omitted when it issues none.
-      ...(tokenMint
-        ? {
-            appTokens: {
-              [tokenMint]: {
-                description: `Funds for ${name}`,
-                name: app.tokenName?.() ?? `${name} Tokens`,
-              },
-            },
-          }
-        : {}),
+      // Omitted entirely when the app issues no tokens: an absent claim means
+      // only HSUSD may settle its charges, which is not the same as an empty one.
+      ...(Object.keys(appTokens).length > 0 ? { appTokens } : {}),
       aud: AUDIENCE,
       capabilities: payments ? { session: true, payments } : { session: true },
       launch: app.launch,

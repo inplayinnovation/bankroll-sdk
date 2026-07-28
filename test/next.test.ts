@@ -170,32 +170,68 @@ describe('manifestRoute', () => {
     );
   });
 
-  it('declares an app token, defaulting its name', async () => {
+  it('declares a token with its display strings', async () => {
     const manifest = decodeManifest(
-      await (await manifestRoute({ ...APP, tokenMint: () => 'M1nt' })()).text(),
+      await (
+        await manifestRoute({
+          ...APP,
+          appTokens: () => ({ M1nt: { name: 'Acme Credit', description: 'Promo credit.' } }),
+        })()
+      ).text(),
     );
     expect(manifest.appTokens).toEqual({
-      M1nt: { description: 'Funds for Acme', name: 'Acme Tokens' },
+      M1nt: { name: 'Acme Credit', description: 'Promo credit.' },
     });
   });
 
-  it('uses a configured token name', async () => {
+  // An app may issue several — the claim is a map, and the starter's single
+  // env var could never express this.
+  it('declares several tokens', async () => {
     const manifest = decodeManifest(
       await (
-        await manifestRoute({ ...APP, tokenMint: () => 'M1nt', tokenName: () => 'Acme Credit' })()
+        await manifestRoute({
+          ...APP,
+          appTokens: () => ({ First: { name: 'One' }, Second: { name: 'Two' } }),
+        })()
       ).text(),
     );
-    expect(manifest.appTokens.M1nt.name).toBe('Acme Credit');
+    expect(Object.keys(manifest.appTokens)).toEqual(['First', 'Second']);
+  });
+
+  it('omits display strings that were not given', async () => {
+    const manifest = decodeManifest(
+      await (await manifestRoute({ ...APP, appTokens: () => ({ M1nt: {} }) })()).text(),
+    );
+    expect(manifest.appTokens).toEqual({ M1nt: {} });
+  });
+
+  // An empty string is invalid to the host, and one bad entry takes the whole
+  // manifest down — so drop the field rather than serve something refused.
+  it('drops empty display strings rather than serving them', async () => {
+    const manifest = decodeManifest(
+      await (
+        await manifestRoute({ ...APP, appTokens: () => ({ M1nt: { name: '', description: 'ok' } }) })()
+      ).text(),
+    );
+    expect(manifest.appTokens.M1nt).toEqual({ description: 'ok' });
+  });
+
+  // Absent means only HSUSD may settle a charge, which is not the same as an
+  // empty object.
+  it('omits the claim entirely for an empty map', async () => {
+    expect(
+      decodeManifest(await (await manifestRoute({ ...APP, appTokens: () => ({}) })()).text()),
+    ).not.toHaveProperty('appTokens');
   });
 
   // Re-read per request, so a token minted while the dev server is up shows up
   // without a restart.
   it('reads the app config on each request', async () => {
-    let mint: string | null = null;
-    const route = manifestRoute({ ...APP, tokenMint: () => mint });
+    let tokens: Record<string, { name?: string }> = {};
+    const route = manifestRoute({ ...APP, appTokens: () => tokens });
 
     expect(decodeManifest(await (await route()).text())).not.toHaveProperty('appTokens');
-    mint = 'M1nt';
+    tokens = { M1nt: { name: 'Acme' } };
     expect(decodeManifest(await (await route()).text())).toHaveProperty('appTokens');
   });
 });
