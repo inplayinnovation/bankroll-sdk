@@ -1,3 +1,6 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Local pack artifacts — `npm pack` output, never committed.
+*.tgz
