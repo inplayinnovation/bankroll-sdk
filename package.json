@@ -32,6 +32,18 @@
     "./next": {
       "types": "./dist/next.d.ts",
       "import": "./dist/next.js"
+    },
+    "./store": {
+      "types": "./dist/store/index.d.ts",
+      "import": "./dist/store/index.js"
+    },
+    "./store/fs": {
+      "types": "./dist/store/fs.d.ts",
+      "import": "./dist/store/fs.js"
+    },
+    "./store/vercel": {
+      "types": "./dist/store/vercel.d.ts",
+      "import": "./dist/store/vercel.js"
     }
   },
   "scripts": {
@@ -46,6 +58,7 @@
   },
   "peerDependencies": {
     "@privy-io/node": "^0.10.1",
+    "@vercel/blob": "^2.0.0",
     "next": ">=15"
   },
   "peerDependenciesMeta": {
@@ -54,12 +67,16 @@
     },
     "next": {
       "optional": true
+    },
+    "@vercel/blob": {
+      "optional": true
     }
   },
   "devDependencies": {
     "@privy-io/node": "^0.10.1",
     "@solana/spl-token": "^0.4.15",
     "@types/node": "^24.0.0",
+    "@vercel/blob": "^2.6.1",
     "happy-dom": "^18.0.0",
     "next": "^16.2.12",
     "tsup": "^8.0.0",

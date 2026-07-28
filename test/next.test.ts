@@ -21,8 +21,16 @@ vi.mock('next/headers', () => ({
   headers: async () => new Headers(state.host ? { host: state.host } : {}),
 }));
 
-const decodeManifest = (jwt: string) =>
-  JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString());
+const part = (jwt: string, index: number): string => {
+  const value = jwt.split('.')[index];
+  if (value === undefined) throw new Error(`manifest has no part ${index}: ${jwt}`);
+  return value;
+};
+
+const decodeJson = (jwt: string, index: number) =>
+  JSON.parse(Buffer.from(part(jwt, index), 'base64url').toString());
+
+const decodeManifest = (jwt: string) => decodeJson(jwt, 1);
 
 const APP: ManifestApp = {
   launch: '/app',
@@ -116,13 +124,12 @@ describe('manifestRoute', () => {
     expect(response.headers.get('content-type')).toBe('application/jwt');
 
     const jwt = await response.text();
-    const [header, , signature] = jwt.split('.');
-    expect(JSON.parse(Buffer.from(header, 'base64url').toString())).toEqual({
+    expect(decodeJson(jwt, 0)).toEqual({
       alg: 'none',
       typ: 'bankroll-app-manifest+jwt',
     });
     // The origin it is served from is the proof, not a signature.
-    expect(signature).toBe('');
+    expect(jwt.split('.')[2]).toBe('');
 
     expect(decodeManifest(jwt)).toMatchObject({
       aud: 'bankroll-app-host',
