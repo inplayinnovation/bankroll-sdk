@@ -15,6 +15,8 @@ export {
   type ConfirmedCharge,
 } from './charges';
 
+export { PUBLIC_MAINNET_RPC, rpcUrl, usingPublicRpc } from './rpc';
+
 export {
   PayError,
   buildPayout,

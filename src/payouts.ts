@@ -24,6 +24,7 @@ import {
 import bs58 from 'bs58';
 
 import { BASE_UNITS_PER_CENT, HSUSD_DECIMALS, HSUSD_MINT } from './charges';
+import { rpcUrl } from './rpc';
 import {
   createAssociatedTokenAccountIdempotentInstruction,
   createTransferCheckedInstruction,
@@ -80,9 +81,7 @@ export class PayError extends Error {
 // ---------------------------------------------------------------------------
 
 function getConnection(): Connection {
-  const rpcUrl = process.env.SOLANA_RPC_URL;
-  if (!rpcUrl) throw new Error('SOLANA_RPC_URL is required');
-  return new Connection(rpcUrl, 'confirmed');
+  return new Connection(rpcUrl(), 'confirmed');
 }
 
 // ---------------------------------------------------------------------------
@@ -105,8 +104,9 @@ const ownSigners = new WeakSet<PaymentSigner>();
 /**
  * A PaymentSigner backed by a raw base58 secret key (the 64-byte format
  * `solana-keygen` and wallet exports use). Signs locally and broadcasts to
- * SOLANA_RPC_URL. The treasury pays the network fee and any recipient
- * token-account rent, so keep some SOL on it.
+ * SOLANA_RPC_URL, or the rate-limited public endpoint when unset. The treasury
+ * pays the network fee and any recipient token-account rent, so keep some SOL
+ * on it.
  */
 export function keypairSigner(secretKey: string): PaymentSigner {
   let keypair: Keypair;

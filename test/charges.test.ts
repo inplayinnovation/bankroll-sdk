@@ -500,11 +500,5 @@ describe('confirmCharge', () => {
     });
   });
 
-  describe('configuration', () => {
-    it('throws a plain configuration error when SOLANA_RPC_URL is unset', async () => {
-      delete process.env.SOLANA_RPC_URL;
-      await expect(confirmCharge(SIGNATURE)).rejects.toThrow('SOLANA_RPC_URL');
-    });
-  });
 });
 

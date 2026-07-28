@@ -4,6 +4,7 @@
 // in what asset, how much, and the memo. Comparing those facts to the order,
 // and storing the signature against replay, is deliberately left to the app:
 // the SDK observes, the app decides.
+import { rpcUrl } from './rpc';
 
 export const HSUSD_MINT = '4FVaHEubcqws8hKwJSiW8f8CmKGUyMsBxTKUytcGdRvd';
 export const HSUSD_DECIMALS = 9;
@@ -103,13 +104,13 @@ interface RpcTransaction {
 }
 
 async function fetchTransaction(
-  rpcUrl: string,
+  endpoint: string,
   signature: string,
   attemptTimeoutMs: number,
 ): Promise<RpcTransaction | null> {
   let response: Response;
   try {
-    response = await fetch(rpcUrl, {
+    response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       signal: AbortSignal.timeout(attemptTimeoutMs),
@@ -124,7 +125,7 @@ async function fetchTransaction(
       }),
     });
   } catch (cause) {
-    throw new ConfirmChargeError('rpc_error', `RPC request to ${rpcUrl} failed`, { cause });
+    throw new ConfirmChargeError('rpc_error', `RPC request to ${endpoint} failed`, { cause });
   }
   if (!response.ok) {
     throw new ConfirmChargeError('rpc_error', `RPC responded ${response.status}`);
@@ -191,7 +192,8 @@ function extractMemo(parsed: RpcTransaction): string | null {
 
 /**
  * Fetches the settled charge `tx` (the signature `bankroll.charge()` resolved
- * with) from your Solana RPC (SOLANA_RPC_URL) and returns its facts. Throws
+ * with) from your Solana RPC (SOLANA_RPC_URL, or the rate-limited public
+ * endpoint when unset) and returns its facts. Throws
  * ConfirmChargeError — a return value means the transfer settled on-chain.
  *
  * The facts are yours to check before releasing value: `payee` must be your
@@ -209,9 +211,7 @@ export async function confirmCharge(
   tx: string,
   options?: ConfirmChargeOptions,
 ): Promise<ConfirmedCharge> {
-  const rpcUrl = process.env.SOLANA_RPC_URL;
-  // Misconfiguration is a programmer error, not a failed charge — throw plain.
-  if (!rpcUrl) throw new Error('SOLANA_RPC_URL is required');
+  const endpoint = rpcUrl();
 
   const deadline = Date.now() + (options?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   let parsed: RpcTransaction | null = null;
@@ -219,7 +219,7 @@ export async function confirmCharge(
   while (!parsed) {
     const attemptTimeoutMs = Math.max(deadline - Date.now(), MIN_ATTEMPT_TIMEOUT_MS);
     try {
-      parsed = await fetchTransaction(rpcUrl, tx, attemptTimeoutMs);
+      parsed = await fetchTransaction(endpoint, tx, attemptTimeoutMs);
       lastRpcError = null;
     } catch (error) {
       if (!(error instanceof ConfirmChargeError)) throw error;
