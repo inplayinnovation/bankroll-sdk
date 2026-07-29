@@ -42,17 +42,6 @@ export async function getOrigin(): Promise<string> {
   return `${protocol}://${host}`;
 }
 
-/**
- * Where this app can be reached from a phone.
- *
- * In development that isn't the request origin: a browser sees localhost, which
- * Bankroll can't open. The dev CLI puts the tunnel origin here, so a link
- * rendered on the laptop works from the phone that scans it.
- */
-export async function publicOrigin(): Promise<string> {
-  return process.env.BANKROLL_DEV_TUNNEL_ORIGIN || (await getOrigin());
-}
-
 // ---------------------------------------------------------------------------
 // Session
 // ---------------------------------------------------------------------------

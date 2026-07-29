@@ -7,7 +7,6 @@ import {
   getOrigin,
   getSession,
   manifestRoute,
-  publicOrigin,
   requireIdentity,
   requireSession,
   type ManifestApp,
@@ -69,23 +68,6 @@ describe('getOrigin', () => {
   it('names force-dynamic as the fix', async () => {
     state.host = null;
     await expect(getOrigin()).rejects.toThrow("dynamic = 'force-dynamic'");
-  });
-});
-
-describe('publicOrigin', () => {
-  beforeEach(() => {
-    state.host = 'localhost:3000';
-    delete process.env.BANKROLL_DEV_TUNNEL_ORIGIN;
-  });
-
-  it('falls back to the request origin', async () => {
-    await expect(publicOrigin()).resolves.toBe('http://localhost:3000');
-  });
-
-  it('prefers the dev tunnel, which is what a phone can reach', async () => {
-    process.env.BANKROLL_DEV_TUNNEL_ORIGIN = 'https://brave-cat-42.trycloudflare.com';
-    await expect(publicOrigin()).resolves.toBe('https://brave-cat-42.trycloudflare.com');
-    delete process.env.BANKROLL_DEV_TUNNEL_ORIGIN;
   });
 });
 
