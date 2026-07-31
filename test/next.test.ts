@@ -152,6 +152,44 @@ describe('manifestRoute', () => {
     );
   });
 
+  it('omits supportUrl when the app declares none', async () => {
+    expect(decodeManifest(await (await manifestRoute(APP)()).text())).not.toHaveProperty(
+      'supportUrl',
+    );
+  });
+
+  // Whatever the app declared, verbatim. The SDK does not police the scheme —
+  // neither does the host, because which app answers for one is the platform's
+  // decision.
+  it.each([
+    'https://help.acme.com/',
+    'mailto:support@acme.com',
+    'tel:+18005551234',
+    'https://discord.gg/acme',
+  ])('declares supportUrl %s untouched', async (supportUrl) => {
+    const manifest = decodeManifest(
+      await (await manifestRoute({ ...APP, supportUrl: () => supportUrl })()).text(),
+    );
+    expect(manifest.supportUrl).toBe(supportUrl);
+  });
+
+  // An empty claim is still a claim, and every claim is part of what a grant is
+  // bound to — so sending one would re-ask every user the day it gained a value.
+  it.each([null, '', '   '])('omits supportUrl rather than sending %p', async (value) => {
+    expect(
+      decodeManifest(await (await manifestRoute({ ...APP, supportUrl: () => value })()).text()),
+    ).not.toHaveProperty('supportUrl');
+  });
+
+  it('trims a declared supportUrl', async () => {
+    const manifest = decodeManifest(
+      await (
+        await manifestRoute({ ...APP, supportUrl: () => '  https://help.acme.com/  ' })()
+      ).text(),
+    );
+    expect(manifest.supportUrl).toBe('https://help.acme.com/');
+  });
+
   it('declares a token with its display strings', async () => {
     const manifest = decodeManifest(
       await (

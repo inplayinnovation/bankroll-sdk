@@ -96,6 +96,21 @@ export interface ManifestApp {
    */
   payments: () => string | null;
   /**
+   * Where your users get help. Bankroll offers it in the app's own menu, and
+   * opening it hands the URL to the operating system — so a help page, a
+   * `mailto:`, a `tel:`, or a chat invite all work, and whichever app claims
+   * that link opens it.
+   *
+   * It may point anywhere; support desks usually live on somebody else's
+   * domain. Declaring nothing simply means no menu item.
+   *
+   * Changing it later re-asks every existing user for consent, because a grant
+   * is bound to the exact manifest it was made against — so set it to something
+   * durable, like a page you control that redirects, rather than a link you
+   * expect to rotate.
+   */
+  supportUrl?: () => string | null;
+  /**
    * The tokens this app issues, keyed by mint address.
    *
    * Declaring a mint is what permits a charge to settle in it: the host lets an
@@ -153,6 +168,7 @@ export function manifestRoute(app: ManifestApp): () => Promise<Response> {
     const name = app.name();
     const payments = app.payments();
     const appTokens = usableTokens(app.appTokens?.() ?? {});
+    const supportUrl = app.supportUrl?.()?.trim();
 
     // An unsecured JWT (alg: none, empty signature) — the origin it is served
     // from is the proof, not a signature.
@@ -167,6 +183,11 @@ export function manifestRoute(app: ManifestApp): () => Promise<Response> {
       manifestVersion: MANIFEST_VERSION,
       name,
       sub: await getOrigin(),
+      // Omitted rather than sent empty. The host ignores a claim it cannot read
+      // as a URL, so an empty one would cost nothing — but every claim is part
+      // of what a grant is bound to, and an empty string is still a difference
+      // that would re-ask the user for consent once it gained a value.
+      ...(supportUrl ? { supportUrl } : {}),
     };
 
     return new Response(`${base64url(header)}.${base64url(payload)}.`, {
