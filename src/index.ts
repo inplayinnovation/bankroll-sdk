@@ -32,6 +32,11 @@ const HTTPS_PROTOCOL = 'https:';
 // protocol against shipped native apps); only the SDK surface renamed.
 const PAY_METHOD = 'pay';
 
+// Prerelease bridge methods — absent on hosts older than client version 2, so
+// the same method-presence pre-flight that guards pay covers them.
+const BALANCES_METHOD = 'balances';
+const DEPOSIT_METHOD = 'deposit';
+
 // ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------
@@ -162,11 +167,13 @@ function mapBridgeError(error: unknown): BankrollError {
 
 type BankrollBridge = NonNullable<Window['bankroll']>;
 
-// Pre-flight for charge(): the host must be ready AND expose the method. An old
-// host can present window.bankroll without a given method, so calling it would
-// be a synchronous TypeError — feature-detect and surface it as
-// 'update_required' instead.
-function requireBridge(method: typeof PAY_METHOD): BankrollBridge {
+// Pre-flight for charge()/deposit()/balances(): the host must be ready AND
+// expose the method. An old host can present window.bankroll without a given
+// method, so calling it would be a synchronous TypeError — feature-detect and
+// surface it as 'update_required' instead.
+function requireBridge(
+  method: typeof BALANCES_METHOD | typeof DEPOSIT_METHOD | typeof PAY_METHOD
+): BankrollBridge {
   const current = status();
   if (current !== STATUS_READY) {
     throw new BankrollError(current, STATUS_ERROR_MESSAGE[current]);
@@ -361,6 +368,70 @@ async function charge(input: ChargeInput): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// Deposit + balances (prerelease)
+// ---------------------------------------------------------------------------
+
+export type DepositInput = {
+  /**
+   * Deposit method to preselect (e.g. 'credits'). The host validates it and
+   * falls back to its default when unknown or ineligible; which credits it can
+   * name is resolved host-side from this app's origin, never from this input.
+   */
+  method?: string;
+};
+
+export type AppTokenBalance = {
+  /** Balance in whole tokens (app tokens are 9-decimal, one token = $1). */
+  amount: number;
+  /** The manifest's display name for the token. */
+  name: string;
+};
+
+export type Balances = {
+  /** The user's cash (HSUSD), in whole US cents. */
+  cashCents: number;
+  /** This app's Coinflow credits, in whole US cents. */
+  creditsCents: number;
+  /**
+   * Balances of every token this app's manifest declares, keyed by mint
+   * address — the same shape as the manifest's appTokens.
+   */
+  tokens: Record<string, AppTokenBalance>;
+};
+
+/**
+ * Present the host's deposit modal, optionally preselecting a method. Resolves
+ * once presented — the deposit itself runs in native UI and settles later.
+ *
+ * @remarks Prerelease — undocumented; the contract may change. Requires a host
+ * at client version 2+; older hosts reject with 'update_required'.
+ */
+async function deposit(input?: DepositInput): Promise<void> {
+  const bridge = requireBridge(DEPOSIT_METHOD);
+  try {
+    return await bridge.deposit!(input);
+  } catch (error) {
+    throw mapBridgeError(error);
+  }
+}
+
+/**
+ * This app's view of value: the user's cash, the app's credits, and its
+ * manifest-declared token balances.
+ *
+ * @remarks Prerelease — undocumented; the contract may change. Requires a host
+ * at client version 2+; older hosts reject with 'update_required'.
+ */
+async function balances(): Promise<Balances> {
+  const bridge = requireBridge(BALANCES_METHOD);
+  try {
+    return await bridge.balances!();
+  } catch (error) {
+    throw mapBridgeError(error);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Public surface
 // ---------------------------------------------------------------------------
 
@@ -370,6 +441,8 @@ export const bankroll = {
   /** @deprecated Use {@link session}. */
   identity,
   charge,
+  balances,
+  deposit,
 };
 
 // Canonical fetch decorator: attaches the session token on every request when
@@ -415,6 +488,13 @@ declare global {
         idempotencyKey?: string;
         token?: string;
       }): Promise<string>;
+      // Prerelease host methods (host version >= 2); feature-detected.
+      balances?(): Promise<{
+        cashCents: number;
+        creditsCents: number;
+        tokens: Record<string, { amount: number; name: string }>;
+      }>;
+      deposit?(input?: { method?: string }): Promise<void>;
     };
     // Legacy marker set by older Bankroll app builds — a presence-only signal
     // used to tell an out-of-date app apart from a standalone browser.
