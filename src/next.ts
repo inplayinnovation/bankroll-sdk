@@ -111,6 +111,13 @@ export interface ManifestApp {
    */
   supportUrl?: () => string | null;
   /**
+   * The app's push public key — `pushAddress()` from the server entry.
+   * Declaring it is half of enabling push; the other half is Bankroll signing
+   * your manifest, which is what makes the declaration count. Omitted from the
+   * payload when it resolves to null.
+   */
+  push?: () => string | null;
+  /**
    * The tokens this app issues, keyed by mint address.
    *
    * Declaring a mint is what permits a charge to settle in it: the host lets an
@@ -163,10 +170,22 @@ const base64url = (value: object) => Buffer.from(JSON.stringify(value)).toString
  * Your app ICON is not in the manifest: serve a square PNG at the fixed path
  * /.well-known/bankroll-icon.png. Until you do, Bankroll shows a monogram.
  */
-export function manifestRoute(app: ManifestApp): () => Promise<Response> {
-  return async function GET(): Promise<Response> {
+export function manifestRoute(app: ManifestApp): (request?: Request) => Promise<Response> {
+  return async function GET(request?: Request): Promise<Response> {
+    // A Bankroll-signed manifest is served VERBATIM — the signature covers
+    // exact bytes, so nothing below may touch it. Any claim change means
+    // Bankroll re-signing and replacing this value. The one exception is
+    // ?signing=1 — the manifest:sign fetch — which gets the BUILT manifest, so
+    // a claims change is signable while the old blob still serves.
+    const signing = request ? new URL(request.url).searchParams.has('signing') : false;
+    const signed = process.env.BANKROLL_SIGNED_MANIFEST;
+    if (signed && !signing) {
+      return new Response(signed, { headers: { 'content-type': CONTENT_TYPE } });
+    }
+
     const name = app.name();
     const payments = app.payments();
+    const push = app.push?.();
     const appTokens = usableTokens(app.appTokens?.() ?? {});
     const supportUrl = app.supportUrl?.()?.trim();
 
@@ -178,7 +197,13 @@ export function manifestRoute(app: ManifestApp): () => Promise<Response> {
       // only HSUSD may settle its charges, which is not the same as an empty one.
       ...(Object.keys(appTokens).length > 0 ? { appTokens } : {}),
       aud: AUDIENCE,
-      capabilities: payments ? { session: true, payments } : { session: true },
+      capabilities: {
+        session: true,
+        ...(payments ? { payments } : {}),
+        // Declared unsigned too: the claim is what Bankroll signs, so it must
+        // appear in the manifest that gets submitted for signing.
+        ...(push ? { push } : {}),
+      },
       launch: app.launch,
       manifestVersion: MANIFEST_VERSION,
       name,

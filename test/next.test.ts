@@ -152,6 +152,42 @@ describe('manifestRoute', () => {
     );
   });
 
+  it('declares push only once a push key exists', async () => {
+    const without = decodeManifest(await (await manifestRoute(APP)()).text());
+    expect(without.capabilities).not.toHaveProperty('push');
+
+    const withKey = decodeManifest(
+      await (await manifestRoute({ ...APP, push: () => 'Pu5hKey' })()).text(),
+    );
+    expect(withKey.capabilities).toEqual({ push: 'Pu5hKey', session: true });
+  });
+
+  // The signature covers exact bytes; the route may not touch them.
+  it('serves a Bankroll-signed manifest verbatim', async () => {
+    process.env.BANKROLL_SIGNED_MANIFEST = 'signed.head.body';
+    try {
+      const response = await manifestRoute(APP)();
+      expect(await response.text()).toBe('signed.head.body');
+      expect(response.headers.get('content-type')).toBe('application/jwt');
+    } finally {
+      delete process.env.BANKROLL_SIGNED_MANIFEST;
+    }
+  });
+
+  // The manifest:sign fetch must see a claims change even while the previously
+  // signed blob is still being served — otherwise a signed manifest could
+  // never be updated.
+  it('serves the built manifest to a ?signing=1 fetch despite a signed blob', async () => {
+    process.env.BANKROLL_SIGNED_MANIFEST = 'signed.head.body';
+    try {
+      const request = new Request('https://app.example/.well-known/bankroll.jwt?signing=1');
+      const manifest = decodeManifest(await (await manifestRoute(APP)(request)).text());
+      expect(manifest.sub).toBe('https://app.example');
+    } finally {
+      delete process.env.BANKROLL_SIGNED_MANIFEST;
+    }
+  });
+
   it('omits supportUrl when the app declares none', async () => {
     expect(decodeManifest(await (await manifestRoute(APP)()).text())).not.toHaveProperty(
       'supportUrl',

@@ -20,6 +20,14 @@ export { PUBLIC_MAINNET_RPC, rpcUrl, usingPublicRpc } from './rpc';
 export { requireTreasury, treasuryAddress, treasurySigner } from './treasury';
 
 export {
+  PushError,
+  pushAddress,
+  sendPush,
+  type PushErrorCode,
+  type PushInput,
+} from './push';
+
+export {
   PayError,
   buildPayout,
   confirmPayout,
