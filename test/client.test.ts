@@ -459,4 +459,35 @@ describe('playLink', () => {
     const { playLink } = await load();
     expect(() => playLink('not a url')).toThrow();
   });
+
+  it('appends the referrer, and omits it when there is none', async () => {
+    const { playLink } = await load();
+    const url = 'https://app.example/game';
+    const wallet = 'J6L33Wi7hVEnBnBM8dpTgD8FfDDGgDFVKnfLLQZ1Ptvi';
+
+    expect(playLink(url, { referrer: wallet })).toBe(
+      `https://joinbankroll.com/play?url=${encodeURIComponent(url)}&ref=${wallet}`,
+    );
+    expect(playLink(url, { referrer: `  ${wallet}\n` })).toBe(
+      `https://joinbankroll.com/play?url=${encodeURIComponent(url)}&ref=${wallet}`,
+    );
+    // An absent, empty, or whitespace-only referrer is simply no referrer —
+    // never a dangling &ref= for the host to puzzle over.
+    for (const options of [undefined, {}, { referrer: '' }, { referrer: '   ' }]) {
+      expect(playLink(url, options)).toBe(
+        `https://joinbankroll.com/play?url=${encodeURIComponent(url)}`,
+      );
+    }
+  });
+
+  // The link builder does not police wallet shape — that is the host's call at
+  // attribution — but it must never let a referrer break the url it builds.
+  it('percent-encodes a referrer rather than trusting it', async () => {
+    const { playLink } = await load();
+    expect(playLink('https://app.example/', { referrer: 'a&url=evil' })).toBe(
+      `https://joinbankroll.com/play?url=${encodeURIComponent(
+        'https://app.example/',
+      )}&ref=a%26url%3Devil`,
+    );
+  });
 });

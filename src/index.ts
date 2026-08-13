@@ -463,14 +463,34 @@ export function withBankrollToken(fetchImpl: typeof fetch): typeof fetch {
   return wrapped;
 }
 
+export interface PlayLinkOptions {
+  /**
+   * The Bankroll user sharing this link — `session.user.wallet` from a verified
+   * session. If the person who opens it is new to Bankroll, they are attributed
+   * as that user's referral.
+   *
+   * Bankroll's referral program is person to person, so this must be a real
+   * Bankroll user's wallet: your app's own treasury has no account behind it and
+   * is attributed to nobody. Whether it pays out is decided by what the new user
+   * does next, not by this link. See
+   * https://docs.joinbankroll.com/build/share-links
+   */
+  referrer?: string;
+}
+
 // Build the shareable link that opens an app inside Bankroll. https-only; a
 // non-https or unparseable url is a programming error, not a BankrollError.
-export function playLink(appUrl: string): string {
+export function playLink(appUrl: string, options?: PlayLinkOptions): string {
   const parsed = new URL(appUrl);
   if (parsed.protocol !== HTTPS_PROTOCOL) {
     throw new Error(`playLink requires an https:// url, got ${parsed.protocol}`);
   }
-  return PLAY_LINK_BASE + encodeURIComponent(parsed.href);
+  const link = PLAY_LINK_BASE + encodeURIComponent(parsed.href);
+  // Not validated here: a wallet's shape is the host's business, and this is a
+  // link builder — an unrecognized referrer costs the attribution, never the
+  // link. Trimmed so a stray newline out of a template doesn't do that.
+  const referrer = options?.referrer?.trim();
+  return referrer ? `${link}&ref=${encodeURIComponent(referrer)}` : link;
 }
 
 declare global {
