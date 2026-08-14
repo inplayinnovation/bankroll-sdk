@@ -373,9 +373,10 @@ async function charge(input: ChargeInput): Promise<string> {
 
 export type DepositInput = {
   /**
-   * Deposit method to preselect (e.g. 'credits'). The host validates it and
-   * falls back to its default when unknown or ineligible; which credits it can
-   * name is resolved host-side from this app's origin, never from this input.
+   * Deposit method to preselect (e.g. 'card'). The host validates it and
+   * falls back to its default when unknown or ineligible; what a purchase
+   * settles as is resolved host-side from this app's origin, never from this
+   * input.
    */
   method?: string;
 };
@@ -390,7 +391,7 @@ export type AppTokenBalance = {
 export type Balances = {
   /** The user's cash (HSUSD), in whole US cents. */
   cashCents: number;
-  /** This app's Coinflow credits, in whole US cents. */
+  /** Credits registered to this app, in whole US cents. */
   creditsCents: number;
   /**
    * Balances of every token this app's manifest declares, keyed by mint
