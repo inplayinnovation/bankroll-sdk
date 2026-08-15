@@ -1,7 +1,7 @@
 {
   "name": "@joinbankroll/sdk",
-  "version": "0.13.0",
-  "description": "Build on Bankroll \u2014 typed client for the window.bankroll bridge, plus server-side session verification, charge confirmation, and payouts",
+  "version": "0.13.1",
+  "description": "Build on Bankroll — typed client for the window.bankroll bridge, plus server-side session verification, charge confirmation, and payouts",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -19,35 +19,43 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./server": {
       "types": "./dist/server.d.ts",
-      "import": "./dist/server.js"
+      "import": "./dist/server.js",
+      "default": "./dist/server.js"
     },
     "./privy": {
       "types": "./dist/privy.d.ts",
-      "import": "./dist/privy.js"
+      "import": "./dist/privy.js",
+      "default": "./dist/privy.js"
     },
     "./next": {
       "types": "./dist/next.d.ts",
-      "import": "./dist/next.js"
+      "import": "./dist/next.js",
+      "default": "./dist/next.js"
     },
     "./store": {
       "types": "./dist/store/index.d.ts",
-      "import": "./dist/store/index.js"
+      "import": "./dist/store/index.js",
+      "default": "./dist/store/index.js"
     },
     "./store/fs": {
       "types": "./dist/store/fs.d.ts",
-      "import": "./dist/store/fs.js"
+      "import": "./dist/store/fs.js",
+      "default": "./dist/store/fs.js"
     },
     "./store/vercel": {
       "types": "./dist/store/vercel.d.ts",
-      "import": "./dist/store/vercel.js"
+      "import": "./dist/store/vercel.js",
+      "default": "./dist/store/vercel.js"
     },
     "./react": {
       "types": "./dist/react.d.ts",
-      "import": "./dist/react.js"
+      "import": "./dist/react.js",
+      "default": "./dist/react.js"
     }
   },
   "scripts": {
@@ -100,5 +108,30 @@
   },
   "overrides": {
     "uuid": "^11.0.0"
+  },
+  "typesVersions": {
+    "*": {
+      "server": [
+        "./dist/server.d.ts"
+      ],
+      "privy": [
+        "./dist/privy.d.ts"
+      ],
+      "next": [
+        "./dist/next.d.ts"
+      ],
+      "store": [
+        "./dist/store/index.d.ts"
+      ],
+      "store/fs": [
+        "./dist/store/fs.d.ts"
+      ],
+      "store/vercel": [
+        "./dist/store/vercel.d.ts"
+      ],
+      "react": [
+        "./dist/react.d.ts"
+      ]
+    }
   }
 }

@@ -73,6 +73,7 @@ export type PushErrorCode =
   | 'unauthorized'
   | 'push_not_enabled'
   | 'push_not_declared'
+  | 'push_muted'
   | 'unknown_user'
   | 'not_your_user'
   | 'invalid_title'
