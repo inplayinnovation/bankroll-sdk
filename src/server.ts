@@ -15,6 +15,12 @@ export {
   type ConfirmedCharge,
 } from './charges';
 
+export {
+  createReference,
+  findChargeByReference,
+  type FindChargeOptions,
+} from './references';
+
 export { PUBLIC_MAINNET_RPC, rpcUrl, usingPublicRpc } from './rpc';
 
 export { requireTreasury, treasuryAddress, treasurySigner } from './treasury';

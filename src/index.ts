@@ -15,6 +15,12 @@ export { BANKROLL_TOKEN_HEADER };
 // update the Bankroll app.
 const MIN_HOST_VERSION = 1;
 
+// The lowest host version that honours the charge fields an app uses to guard
+// a payment — `reference` and `expiresInSeconds`. Below it either would be
+// ignored, leaving the app believing in a protection it doesn't have, so
+// passing one to an older host is refused outright.
+const GUARDED_CHARGE_MIN_HOST_VERSION = 3;
+
 // Refresh the session token this long before its exp so a request never goes out
 // with one that expires mid-flight. Server TTL is 15 min.
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
@@ -82,6 +88,7 @@ const CODE_CAPABILITY_NOT_REGISTERED = 'capability_not_registered';
 const CODE_MANIFEST_ERROR = 'manifest_error';
 const CODE_IDEMPOTENCY_CONFLICT = 'idempotency_conflict';
 const CODE_PAYMENT_DENIED = 'payment_denied';
+const CODE_CHARGE_EXPIRED = 'charge_expired';
 const CODE_UNKNOWN = 'unknown';
 
 // Additional reasons the host can reject with — part of the stable public
@@ -103,6 +110,7 @@ export type BankrollErrorCode =
   | typeof CODE_MANIFEST_ERROR
   | typeof CODE_IDEMPOTENCY_CONFLICT
   | typeof CODE_PAYMENT_DENIED
+  | typeof CODE_CHARGE_EXPIRED
   | ReservedErrorCode
   | typeof CODE_UNKNOWN;
 
@@ -137,6 +145,7 @@ const WIRE_INSUFFICIENT_FUNDS = 'insufficient_funds';
 const WIRE_INVALID_AMOUNT = 'pay requires a positive whole-cent amount';
 const WIRE_IDEMPOTENCY_CONFLICT = 'idempotency_conflict';
 const WIRE_PAYMENT_DENIED = 'payment_denied';
+const WIRE_CHARGE_EXPIRED = 'charge_expired';
 const WIRE_NOT_REGISTERED_MARKER = ' is not registered for ';
 const WIRE_MANIFEST_MARKER = 'Bankroll manifest';
 
@@ -147,6 +156,7 @@ function mapReasonToCode(message: string): BankrollErrorCode {
   if (message === WIRE_INVALID_AMOUNT) return CODE_INVALID_AMOUNT;
   if (message === WIRE_IDEMPOTENCY_CONFLICT) return CODE_IDEMPOTENCY_CONFLICT;
   if (message === WIRE_PAYMENT_DENIED) return CODE_PAYMENT_DENIED;
+  if (message === WIRE_CHARGE_EXPIRED) return CODE_CHARGE_EXPIRED;
   if (message.includes(WIRE_NOT_REGISTERED_MARKER)) return CODE_CAPABILITY_NOT_REGISTERED;
   if (message.includes(WIRE_MANIFEST_MARKER)) return CODE_MANIFEST_ERROR;
   // Everything else is deliberately 'unknown' with its message preserved —
@@ -325,6 +335,43 @@ export type ChargeInput = {
    */
   idempotencyKey?: string;
   /**
+   * How long the user has to approve, in whole seconds. **Every charge already
+   * expires** — this only changes the window, which defaults to 90 seconds.
+   * The clock starts when the approval sheet appears, not when you call, so it
+   * is the user's deciding time and the host's own setup doesn't eat into it.
+   *
+   * Past it the charge rejects `charge_expired` with nothing signed, nothing
+   * moved, and the `idempotencyKey` unconsumed, so retrying at a fresh price
+   * is clean.
+   *
+   * The bound is what makes a [reference]{@link ChargeInput.reference}
+   * conclusive: a charge that hasn't landed within the window plus the
+   * lifetime of its own blockhash never will, so an unresolved reference stops
+   * meaning "not yet" and starts meaning "not paid". Allow about five minutes
+   * from the call at the default window.
+   *
+   * A duration rather than a deadline: a deadline would be read against the
+   * device's clock, and the person who gains by defeating an expiry is the one
+   * holding the device.
+   *
+   * Requires a Bankroll app at client version 3+.
+   */
+  expiresInSeconds?: number;
+  /**
+   * An address the transfer carries as an inert read-only account, so your
+   * server can find this charge on-chain later — with
+   * `findChargeByReference()` from `@joinbankroll/sdk/server` — by an id it
+   * minted before the payment existed. Generate it with `createReference()`
+   * when you create the order, store it alongside the order, and pass the same
+   * one on every attempt to pay for it.
+   *
+   * This is what makes a charge recoverable when the page never gets to hand
+   * you the signature. Requires a Bankroll app at client version 3+; older
+   * hosts reject with `update_required` rather than settling a charge you
+   * could never look up.
+   */
+  reference?: string;
+  /**
    * Mint to charge in. Defaults to HSUSD; name one of your own `appTokens`
    * mints to charge that token instead. The host settles a token charge only
    * when your manifest declares that mint, and your server must still branch on
@@ -335,8 +382,10 @@ export type ChargeInput = {
 
 interface BridgePayload {
   amountCents: number;
+  expiresInSeconds?: number;
   idempotencyKey: string;
   memo?: string;
+  reference?: string;
   token?: string;
 }
 
@@ -360,6 +409,21 @@ async function charge(input: ChargeInput): Promise<string> {
   const memo = input.memo?.trim().slice(0, MEMO_MAX_LENGTH);
   if (memo) payload.memo = memo;
   if (input.token !== undefined) payload.token = input.token;
+  // Both of these are protections the caller asked for, and an older host
+  // would ignore either one silently — settling a charge that can never be
+  // found, or honouring a price however long the user took. Refuse loudly
+  // instead; a caller that would rather degrade than block can catch this and
+  // retry without them.
+  if (input.expiresInSeconds !== undefined || input.reference !== undefined) {
+    if (leadingInt(bridge.version) < GUARDED_CHARGE_MIN_HOST_VERSION) {
+      throw new BankrollError(
+        STATUS_UPDATE_REQUIRED,
+        STATUS_ERROR_MESSAGE[STATUS_UPDATE_REQUIRED],
+      );
+    }
+  }
+  if (input.expiresInSeconds !== undefined) payload.expiresInSeconds = input.expiresInSeconds;
+  if (input.reference !== undefined) payload.reference = input.reference;
   try {
     return await bridge.pay(payload);
   } catch (error) {
@@ -505,8 +569,12 @@ declare global {
       identity?(): Promise<string>;
       pay(input: {
         amountCents: number;
+        // Host version 3+: refuses the charge if approval takes longer.
+        expiresInSeconds?: number;
         memo?: string;
         idempotencyKey?: string;
+        // Host version 3+: carried onto the transfer as a read-only account.
+        reference?: string;
         token?: string;
       }): Promise<string>;
       // Prerelease host methods (host version >= 2); feature-detected.

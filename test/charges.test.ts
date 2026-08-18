@@ -164,6 +164,7 @@ describe('confirmCharge', () => {
     const payment = await confirmCharge(SIGNATURE);
 
     expect(payment).toEqual({
+      signature: SIGNATURE,
       payer: PAYER,
       payee: PAYEE,
       mint: HSUSD_MINT,

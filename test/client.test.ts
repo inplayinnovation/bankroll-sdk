@@ -366,6 +366,10 @@ describe('pay bridge-rejection mapping', () => {
     expect(await payCodeFor('payment_denied')).toBe('payment_denied');
   });
 
+  it('exact charge_expired', async () => {
+    expect(await payCodeFor('charge_expired')).toBe('charge_expired');
+  });
+
   it('exact "pay requires a positive whole-cent amount" → invalid_amount', async () => {
     expect(await payCodeFor('pay requires a positive whole-cent amount')).toBe('invalid_amount');
   });
@@ -396,6 +400,77 @@ describe('pay bridge-rejection mapping', () => {
     expect(error).toBeInstanceOf(BankrollError);
     expect((error as InstanceType<typeof BankrollError>).code).toBe('unknown');
     expect((error as InstanceType<typeof BankrollError>).message).toBe('Authentication required');
+  });
+});
+
+describe('charge reference', () => {
+  const REFERENCE = 'GgRva3ZaFuqDDVxr8CDsFcSf7ETNqQFJRhc4Y5nqsFhk';
+
+  it('passes the reference through to the bridge on a v3 host', async () => {
+    const payMock = vi.fn().mockResolvedValue('sig');
+    setBridge({ version: '3', identity: vi.fn(), pay: payMock });
+    const { bankroll } = await load();
+    await bankroll.charge({ amountCents: 100, reference: REFERENCE });
+    expect((payMock.mock.calls[0]![0] as { reference?: string }).reference).toBe(REFERENCE);
+  });
+
+  // An older host would ignore it and settle a charge the app can never find.
+  it('rejects update_required on a pre-3 host without calling the bridge', async () => {
+    const payMock = vi.fn();
+    setBridge({ version: '2', identity: vi.fn(), pay: payMock });
+    const { bankroll, BankrollError } = await load();
+    const error = await bankroll
+      .charge({ amountCents: 100, reference: REFERENCE })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BankrollError);
+    expect((error as InstanceType<typeof BankrollError>).code).toBe('update_required');
+    expect(payMock).not.toHaveBeenCalled();
+  });
+
+  it('omits the field entirely when no reference is supplied', async () => {
+    const payMock = vi.fn().mockResolvedValue('sig');
+    setBridge({ version: '3', identity: vi.fn(), pay: payMock });
+    const { bankroll } = await load();
+    await bankroll.charge({ amountCents: 100 });
+    expect('reference' in (payMock.mock.calls[0]![0] as object)).toBe(false);
+  });
+
+  // The gate is opt-in: a charge without a reference still works everywhere.
+  it('leaves a plain charge working on an old host', async () => {
+    const payMock = vi.fn().mockResolvedValue('sig');
+    setBridge({ version: '2', identity: vi.fn(), pay: payMock });
+    const { bankroll } = await load();
+    await expect(bankroll.charge({ amountCents: 100 })).resolves.toBe('sig');
+  });
+});
+
+describe('charge expiry', () => {
+  it('passes expiresInSeconds through to the bridge on a v3 host', async () => {
+    const payMock = vi.fn().mockResolvedValue('sig');
+    setBridge({ version: '3', identity: vi.fn(), pay: payMock });
+    const { bankroll } = await load();
+    await bankroll.charge({ amountCents: 100, expiresInSeconds: 60 });
+    expect((payMock.mock.calls[0]![0] as { expiresInSeconds?: number }).expiresInSeconds).toBe(60);
+  });
+
+  it('rejects update_required on a pre-3 host without calling the bridge', async () => {
+    const payMock = vi.fn();
+    setBridge({ version: '2', identity: vi.fn(), pay: payMock });
+    const { bankroll, BankrollError } = await load();
+    const error = await bankroll
+      .charge({ amountCents: 100, expiresInSeconds: 60 })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BankrollError);
+    expect((error as InstanceType<typeof BankrollError>).code).toBe('update_required');
+    expect(payMock).not.toHaveBeenCalled();
+  });
+
+  it('omits the field entirely when no expiry is supplied', async () => {
+    const payMock = vi.fn().mockResolvedValue('sig');
+    setBridge({ version: '3', identity: vi.fn(), pay: payMock });
+    const { bankroll } = await load();
+    await bankroll.charge({ amountCents: 100 });
+    expect('expiresInSeconds' in (payMock.mock.calls[0]![0] as object)).toBe(false);
   });
 });
 

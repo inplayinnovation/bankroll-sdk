@@ -40,6 +40,13 @@ export class ConfirmChargeError extends Error {
 }
 
 export interface ConfirmedCharge {
+  /**
+   * The charge's transaction signature — unique per charge, and the key to
+   * store it under so the same payment can't be redeemed twice. Redundant when
+   * you called confirmCharge() with it in hand; the point of it being here is
+   * findChargeByReference(), where the signature is the thing you didn't have.
+   */
+  signature: string;
   /** Wallet the funds left. Compare to your verified session's `user.wallet`. */
   payer: string;
   /** Wallet the funds arrived at. Compare to your `capabilities.payments` address. */
@@ -274,6 +281,7 @@ export async function confirmCharge(
   // past Number's 2^53 limit on atomic units; only dust needs the float path.
   const units = credit[1];
   return {
+    signature: tx,
     payer: debit[0],
     payee: credit[0],
     mint,
