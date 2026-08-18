@@ -111,6 +111,15 @@ export interface ManifestApp {
    */
   supportUrl?: () => string | null;
   /**
+   * A Subresource Integrity hash of the icon served at
+   * /.well-known/bankroll-icon.png — `sha256-<base64>` of the exact bytes.
+   * Declare it when you replace the icon: a changed digest is a manifest
+   * change, which is what carries the new icon to users who already connected.
+   * Omitted from the payload when it resolves to null — omit it whenever you
+   * serve no icon.
+   */
+  iconDigest?: () => string | null;
+  /**
    * The app's push public key — `pushAddress()` from the server entry.
    * Declaring it is half of enabling push; the other half is Bankroll signing
    * your manifest, which is what makes the declaration count. Omitted from the
@@ -188,6 +197,7 @@ export function manifestRoute(app: ManifestApp): (request?: Request) => Promise<
     const push = app.push?.();
     const appTokens = usableTokens(app.appTokens?.() ?? {});
     const supportUrl = app.supportUrl?.()?.trim();
+    const iconDigest = app.iconDigest?.()?.trim();
 
     // An unsecured JWT (alg: none, empty signature) — the origin it is served
     // from is the proof, not a signature.
@@ -204,6 +214,9 @@ export function manifestRoute(app: ManifestApp): (request?: Request) => Promise<
         // appear in the manifest that gets submitted for signing.
         ...(push ? { push } : {}),
       },
+      // Omitted rather than sent empty, like supportUrl below — and omitted
+      // when no icon is served, so the claim never promises bytes that 404.
+      ...(iconDigest ? { iconDigest } : {}),
       launch: app.launch,
       manifestVersion: MANIFEST_VERSION,
       name,

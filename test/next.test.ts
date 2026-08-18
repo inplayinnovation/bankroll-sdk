@@ -226,6 +226,28 @@ describe('manifestRoute', () => {
     expect(manifest.supportUrl).toBe('https://help.acme.com/');
   });
 
+  it('omits iconDigest when the app declares none', async () => {
+    expect(decodeManifest(await (await manifestRoute(APP)()).text())).not.toHaveProperty(
+      'iconDigest',
+    );
+  });
+
+  it('declares iconDigest untouched', async () => {
+    const digest = 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=';
+    const manifest = decodeManifest(
+      await (await manifestRoute({ ...APP, iconDigest: () => digest })()).text(),
+    );
+    expect(manifest.iconDigest).toBe(digest);
+  });
+
+  // An icon claim with no icon behind it, or an empty one, would still be a
+  // claim — omit it instead, exactly like supportUrl.
+  it.each([null, '', '   '])('omits iconDigest rather than sending %p', async (value) => {
+    expect(
+      decodeManifest(await (await manifestRoute({ ...APP, iconDigest: () => value })()).text()),
+    ).not.toHaveProperty('iconDigest');
+  });
+
   it('declares a token with its display strings', async () => {
     const manifest = decodeManifest(
       await (
