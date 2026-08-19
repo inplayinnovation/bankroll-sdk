@@ -30,6 +30,13 @@ const charge = await confirmCharge(signature)
 
 // env: BANKROLL_TREASURY_KEY — pay a user from your treasury (winnings, refunds)
 const { signature: payout } = await pay({ to: session.user.wallet, amountCents: 2500 })
+
+// keeping a payout row? Know the signature BEFORE anything is broadcast:
+const signed = await buildAndSignPayout({ to: session.user.wallet, amountCents: 2500 })
+// persist signed.{transaction,signature,lastValidBlockHeight} in the write that
+// locks the row, then:
+await sendPayout(signed.transaction)
+await confirmPayout(signed.signature, { lastValidBlockHeight: signed.lastValidBlockHeight })
 ```
 
 ```ts

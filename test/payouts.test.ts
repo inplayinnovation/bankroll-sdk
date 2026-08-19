@@ -15,11 +15,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { BASE_UNITS_PER_CENT, HSUSD_DECIMALS, HSUSD_MINT } from '../src/charges';
 import {
   PayError,
+  buildAndSignPayout,
   buildPayout,
   confirmPayout,
   keypairSigner,
   pay,
   sendPayout,
+  signPayout,
   type PaymentSigner,
 } from '../src/payouts';
 
@@ -456,6 +458,52 @@ describe('pay', () => {
       expect(tx.instructions).toHaveLength(3);
       // Nothing sent, nothing confirmed — build is a pure read + assemble.
       expect(server.requests.map((r) => r.method)).toEqual(['getLatestBlockhash']);
+    });
+
+    it('buildAndSignPayout knows the final signature before anything is broadcast', async () => {
+      const server = await serve(happyHandlers());
+
+      const signed = await buildAndSignPayout({
+        to: RECIPIENT.toBase58(),
+        amountCents: 2500,
+        memo: 'grant:1',
+      });
+
+      // Build + sign is a pure read + assemble — nothing was sent.
+      expect(server.requests.map((r) => r.method)).toEqual(['getLatestBlockhash']);
+      expect(signed.lastValidBlockHeight).toBe(LAST_VALID);
+      expect(signed.blockhash).toBe(BLOCKHASH);
+      const tx = Transaction.from(Buffer.from(signed.transaction, 'base64'));
+      expect(tx.verifySignatures()).toBe(true);
+
+      // The send lands the EXACT recorded bytes under the EXACT pre-known id.
+      const { signature } = await sendPayout(signed.transaction);
+      expect(signature).toBe(signed.signature);
+      expect(sentWireTx(server).toString('base64')).toBe(signed.transaction);
+    });
+
+    it('signPayout signs built bytes deterministically', async () => {
+      await serve(happyHandlers());
+      const built = await buildPayout({ to: RECIPIENT.toBase58(), amountCents: 100 });
+
+      const first = signPayout(built.transaction);
+      const second = signPayout(built.transaction);
+
+      expect(first.signature).toBe(second.signature);
+      expect(first.transaction).toBe(second.transaction);
+    });
+
+    it('signPayout throws for a signer that signs only at send time', async () => {
+      await serve(happyHandlers());
+      const built = await buildPayout({ to: RECIPIENT.toBase58(), amountCents: 100 });
+      const vendorOnly: PaymentSigner = {
+        address: TREASURY.publicKey.toBase58(),
+        sendTransaction: async () => 'never',
+      };
+
+      expect(() => signPayout(built.transaction, { signer: vendorOnly })).toThrow(
+        /no signature can exist before broadcast/,
+      );
     });
 
     it('sendPayout hands the signer EXACTLY the built bytes (byte-identical replay)', async () => {

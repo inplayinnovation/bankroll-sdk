@@ -2,10 +2,12 @@
 // from the app's treasury to a user's wallet. The SDK owns the mechanics —
 // transaction build (transferChecked + idempotent recipient-ATA create +
 // optional memo), signing, broadcast, and
-// confirmation — while idempotency is deliberately the caller's duty: keep one
-// payout row per settled order (UNIQUE), store the returned signature, and
-// never blind-retry a timed-out send (the thrown error carries what you need
-// to fence: the signature and lastValidBlockHeight).
+// confirmation — while idempotency is deliberately the caller's duty: keep
+// one payout row per settled order (UNIQUE) and store the transaction's
+// signature BEFORE broadcasting it (buildAndSignPayout — signing is
+// deterministic, so the signature exists before any send). An uncertain
+// outcome is then always answerable by the stored signature; never
+// blind-retry one (the lifecycle note below has the full pattern).
 //
 // Solana mechanics come from @solana/web3.js, pinned to an EXACT version (no
 // ranges) — this entry sits next to treasury key material, so a newly
@@ -44,7 +46,7 @@ const CONFIRM_POLL_INTERVAL_MS = 2_000;
 
 export type PayErrorCode =
   | 'rpc_error' // an RPC request failed — if `signature` is absent, nothing was sent
-  | 'send_failed' // the RPC rejected the broadcast (incl. preflight) — nothing was sent
+  | 'send_failed' // the RPC rejected THIS submission (incl. preflight) — it sent nothing; a resend of STORED bytes judges the past by the stored signature, never by this rejection
   | 'failed_on_chain' // the transaction landed but failed — no funds moved
   | 'expired' // provably dead: blockhash expired unused — safe to retry
   | 'confirmation_timeout'; // outcome unknown — it may still land; fence before retrying
@@ -93,6 +95,15 @@ export interface PaymentSigner {
   address: string;
   /** Sign the base64 wire transaction and broadcast it; resolve with the signature. */
   sendTransaction(txBase64: string): Promise<string>;
+  /**
+   * Sign the base64 wire transaction and return it WITHOUT broadcasting.
+   * Ed25519 signing is deterministic, so the returned signature is the exact
+   * id these bytes will carry on-chain — knowable before any send, which is
+   * what lets bookkeeping store the signature in the same write as the bytes.
+   * Absent on signers that cannot know it (a wallet service may re-sign with
+   * a fresh blockhash at send time).
+   */
+  signTransaction?(txBase64: string): SignedPayout;
 }
 
 // Signers created by keypairSigner() sign the exact bytes pay() built, so the
@@ -118,20 +129,37 @@ export function keypairSigner(secretKey: string): PaymentSigner {
       cause,
     });
   }
+  // Sign the exact bytes given. Ed25519 is deterministic, so the signature —
+  // the transaction's on-chain id — exists the moment the bytes do, before
+  // any broadcast. Signing already-signed bytes replaces the signature with
+  // the identical one, so built and signed transactions are interchangeable
+  // here.
+  const sign = (txBase64: string): { tx: Transaction; signature: string } => {
+    const tx = Transaction.from(Buffer.from(txBase64, 'base64'));
+    tx.sign(keypair);
+    return { tx, signature: bs58.encode(tx.signature!) };
+  };
+
   const signer: PaymentSigner = {
     address: keypair.publicKey.toBase58(),
+    signTransaction(txBase64: string): SignedPayout {
+      const { tx, signature } = sign(txBase64);
+      return { transaction: tx.serialize().toString('base64'), signature };
+    },
     async sendTransaction(txBase64: string): Promise<string> {
-      const tx = Transaction.from(Buffer.from(txBase64, 'base64'));
-      tx.sign(keypair);
-      // Ed25519 is deterministic, so the signature is known before broadcast.
-      const signature = bs58.encode(tx.signature!);
+      const { tx, signature } = sign(txBase64);
       try {
         await getConnection().sendRawTransaction(tx.serialize(), {
           preflightCommitment: 'confirmed',
         });
       } catch (error) {
         if (error instanceof SendTransactionError) {
-          // The RPC answered with a rejection — nothing was broadcast.
+          // The RPC answered with a rejection — THIS submission sent nothing.
+          // Note it cannot speak for the past: a resend of stored bytes whose
+          // earlier submission landed rejects here too ("already been
+          // processed" inside the status-cache horizon, "Blockhash not found"
+          // beyond it). Replayers judge the past by the signature they stored
+          // at sign time, never by this rejection.
           throw new PayError('send_failed', `the RPC rejected the broadcast: ${error.message}`, {
             cause: error,
           });
@@ -159,13 +187,24 @@ function defaultSigner(): PaymentSigner {
 }
 
 // ---------------------------------------------------------------------------
-// The payout lifecycle: buildPayout → sendPayout → confirmPayout.
-// pay() is their composition. Apps with record-before-broadcast machinery use
-// the steps directly: persist what buildPayout returns (the exact bytes and
-// their expiry) in the same write that locks the payout row, broadcast those
-// bytes with sendPayout — a recorded transaction replays byte-identically, so
-// wallet-service idempotency (same key + same body) holds across retries —
-// and confirm, or later re-confirm, with confirmPayout.
+// The payout lifecycle: build → sign → STORE → send → confirm.
+//
+// pay() is the composition for apps without payout bookkeeping. Apps that
+// keep a payout row use the steps directly, and the order is the point:
+// buildAndSignPayout() first, then persist everything it returns — the exact
+// bytes, their SIGNATURE, and their expiry — in the same write that locks the
+// payout row, and only then sendPayout(). Signing is deterministic, so the
+// signature is the transaction's final id before anything is broadcast: once
+// it is stored, there is no crash window in which money can move under an id
+// nobody wrote down. Recovery never asks "did my send go through?" — it asks
+// confirmPayout(storedSignature), which has a definite answer: confirmed, or
+// provably expired (safe to build anew). Resending stored bytes is always
+// harmless — identical bytes are the same transaction, which can land only
+// once.
+//
+// The invariant: never broadcast bytes whose signature is not already durably
+// stored, and never build a second transaction for the same obligation until
+// the first is proven dead.
 // ---------------------------------------------------------------------------
 
 export interface PayInput {
@@ -200,9 +239,9 @@ export interface BuiltPayout {
 /**
  * Build the payout transaction without sending it: idiomatic ATA-create-if-
  * needed + transferChecked + the caller's memo, on a fresh blockhash. Nothing
- * is broadcast and nothing needs signing yet — record the result on your
- * payout row before you send, and the send can always be retried or audited
- * against exactly what was recorded.
+ * is broadcast and nothing is signed yet. Bookkeeping apps usually want
+ * buildAndSignPayout instead, which also derives the signature to store with
+ * the bytes.
  */
 export async function buildPayout(
   input: PayInput,
@@ -300,9 +339,68 @@ export async function buildPayout(
   };
 }
 
+export interface SignedPayout {
+  /** The signed wire transaction, base64. Persist verbatim; send verbatim. */
+  transaction: string;
+  /**
+   * The transaction's signature — its final on-chain id, known before any
+   * broadcast. Store it in the same write as the bytes: recovery then always
+   * starts from a signature the chain can be asked about.
+   */
+  signature: string;
+}
+
+export interface BuiltSignedPayout extends SignedPayout {
+  /** The block height after which this transaction can never land. */
+  lastValidBlockHeight: number;
+  /** The recent blockhash the transaction is built on. */
+  blockhash: string;
+}
+
 /**
- * Sign and broadcast a built payout — EXACTLY the bytes given, unmodified, so
- * a transaction recorded at build time replays byte-identically on retry.
+ * Sign a built payout without broadcasting anything. Ed25519 signing is
+ * deterministic, so the returned signature is the exact id these bytes will
+ * carry on-chain — the datum to persist BEFORE any send.
+ *
+ * Requires a signer that signs locally (the default keypair signer does).
+ * Throws for signers that re-sign at send time (privySigner) — no signature
+ * can exist there before broadcast; rely on that signer's own idempotency
+ * instead.
+ */
+export function signPayout(transaction: string, options?: PayoutOptions): SignedPayout {
+  const signer = options?.signer ?? defaultSigner();
+  if (signer.signTransaction === undefined) {
+    throw new Error(
+      'this signer signs at send time, so no signature can exist before broadcast — ' +
+        'rely on its own idempotency instead (privySigner: idempotencyKey)',
+    );
+  }
+  return signer.signTransaction(transaction);
+}
+
+/**
+ * buildPayout and signPayout in one call: everything a payout row needs — the
+ * exact bytes, their final signature, and their expiry — with nothing sent.
+ * The canonical first step of the lifecycle above: persist all of it in the
+ * write that locks the payout row, then sendPayout.
+ */
+export async function buildAndSignPayout(
+  input: PayInput,
+  options?: PayoutOptions,
+): Promise<BuiltSignedPayout> {
+  const built = await buildPayout(input, options);
+  const signed = signPayout(built.transaction, options);
+  return {
+    ...signed,
+    lastValidBlockHeight: built.lastValidBlockHeight,
+    blockhash: built.blockhash,
+  };
+}
+
+/**
+ * Sign and broadcast a built or signed payout — EXACTLY the bytes given
+ * semantically: signing the same bytes again is deterministic, so a signed
+ * transaction replays to the identical signature however often it is sent.
  * Resolves with the signature as soon as the broadcast is accepted; it does
  * not wait for confirmation (that's confirmPayout's job).
  */
@@ -445,8 +543,12 @@ export async function confirmPayout(
  * Idempotency is yours either way: keep one payout row per settled order
  * (UNIQUE), store the returned signature, and on `confirmation_timeout` use
  * the error's signature + lastValidBlockHeight to check the outcome before
- * retrying — `expired` and `send_failed` are the only codes that guarantee
- * nothing moved.
+ * retrying. For THIS call's freshly built transaction, `expired` and
+ * `send_failed` guarantee nothing moved (with a per-order memo, a fresh
+ * build cannot collide with a past landing). Apps that persist and replay
+ * bytes themselves should use buildAndSignPayout + sendPayout + confirmPayout
+ * instead, where a rejected resend says nothing about the past — the stored
+ * signature does.
  */
 export async function pay(
   input: PayInput,

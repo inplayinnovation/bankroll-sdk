@@ -57,7 +57,7 @@ npx bankroll token create --name "Promo Credit"    # play money for testing the 
 3. Before you release value, check all four facts on the confirmed charge: `payee` is your treasury, `mint` is HSUSD or a declared app token, `amountCents` matches the order, `payer` is the session wallet. The `payee` check is the classic miss. The `mint` check is what stops free tokens from buying real value.
 4. Record each charge with one atomic create, keyed by the transaction (`sortableId(slot, signature)`). `created: false` means a retry or a replay — return the existing charge; never grant twice.
 5. Mint a `reference` and an `idempotencyKey` on the server *before* you call `charge()`, and store them. If the result never comes back, find the charge with `findChargeByReference()`. Never call `charge()` again to learn an outcome.
-6. Never blind-retry a payout with an unknown outcome (`confirmation_timeout`, or `rpc_error` with a signature). Only `expired` and `send_failed` prove that nothing moved.
+6. Store the payout's signature BEFORE broadcasting it: `buildAndSignPayout()` → persist bytes + signature + expiry in the same write that locks the payout row → `sendPayout()` → `confirmPayout()`. Signing is deterministic, so the signature exists before any send — once stored, every uncertain outcome is answerable by `confirmPayout(storedSignature)`. Never blind-retry: only `expired` proves the transaction never landed and never can; `send_failed` rejects one submission, not the past.
 7. Pay back in the asset that paid. A charge in app tokens pays out app tokens, never HSUSD.
 
 ## STOP — ask the user first

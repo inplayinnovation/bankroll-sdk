@@ -35,17 +35,21 @@ export {
 
 export {
   PayError,
+  buildAndSignPayout,
   buildPayout,
   confirmPayout,
   keypairSigner,
   pay,
   sendPayout,
+  signPayout,
   type BuiltPayout,
+  type BuiltSignedPayout,
   type ConfirmPayoutOptions,
   type PayErrorCode,
   type PayInput,
   type PaymentSigner,
   type PayoutOptions,
+  type SignedPayout,
 } from './payouts';
 
 const ALG = 'RS256';
