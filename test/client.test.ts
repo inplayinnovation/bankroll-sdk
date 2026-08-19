@@ -14,6 +14,7 @@ type BridgeShape = {
   session?: unknown;
   identity?: unknown;
   pay?: unknown;
+  haptics?: unknown;
 };
 
 function setBridge(bridge: BridgeShape): void {
@@ -471,6 +472,34 @@ describe('charge expiry', () => {
     const { bankroll } = await load();
     await bankroll.charge({ amountCents: 100 });
     expect('expiresInSeconds' in (payMock.mock.calls[0]![0] as object)).toBe(false);
+  });
+});
+
+describe('haptics', () => {
+  it('resolves silently with no host at all', async () => {
+    const { bankroll } = await load();
+    await expect(bankroll.haptics({ type: 'heavy' })).resolves.toBeUndefined();
+  });
+
+  it('resolves silently on a host without the method', async () => {
+    setBridge({ version: '3', identity: vi.fn(), pay: vi.fn() });
+    const { bankroll } = await load();
+    await expect(bankroll.haptics()).resolves.toBeUndefined();
+  });
+
+  it('forwards the input to a current host', async () => {
+    const hapticsFn = vi.fn().mockResolvedValue(undefined);
+    setBridge({ version: '4', identity: vi.fn(), pay: vi.fn(), haptics: hapticsFn });
+    const { bankroll } = await load();
+    await bankroll.haptics({ type: 'success' });
+    expect(hapticsFn).toHaveBeenCalledWith({ type: 'success' });
+  });
+
+  it('resolves silently when the bridge rejects', async () => {
+    const hapticsFn = vi.fn().mockRejectedValue(new Error('engine down'));
+    setBridge({ version: '4', identity: vi.fn(), pay: vi.fn(), haptics: hapticsFn });
+    const { bankroll } = await load();
+    await expect(bankroll.haptics()).resolves.toBeUndefined();
   });
 });
 

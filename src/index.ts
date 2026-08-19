@@ -497,6 +497,49 @@ async function balances(): Promise<Balances> {
 }
 
 // ---------------------------------------------------------------------------
+// Haptics
+// ---------------------------------------------------------------------------
+
+const HAPTICS_METHOD = 'haptics';
+
+export type HapticType =
+  | 'error'
+  | 'heavy'
+  | 'light'
+  | 'medium'
+  | 'selection'
+  | 'success'
+  | 'warning';
+
+export type HapticsInput = {
+  /**
+   * The vibration to play: an impact ('light' | 'medium' | 'heavy'), a
+   * notification ('success' | 'warning' | 'error'), or 'selection'. Omitted —
+   * or unknown to the host — plays the host's default, a heavy impact.
+   */
+  type?: HapticType;
+};
+
+/**
+ * Fire the phone's haptic engine (Bankroll host at client version 4+).
+ *
+ * Decoration only — so unlike every other capability this NEVER rejects: in a
+ * plain browser, under a host too old to have it, or on any bridge failure it
+ * resolves having done nothing. Call it freely at the moments that deserve
+ * weight; never gate anything on it.
+ */
+async function haptics(input?: HapticsInput): Promise<void> {
+  if (status() !== STATUS_READY) return;
+  const host = window.bankroll;
+  if (!host || typeof host[HAPTICS_METHOD] !== 'function') return;
+  try {
+    await host.haptics!(input);
+  } catch {
+    // A vibration that didn't happen is not an error worth surfacing.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Public surface
 // ---------------------------------------------------------------------------
 
@@ -508,6 +551,7 @@ export const bankroll = {
   charge,
   balances,
   deposit,
+  haptics,
 };
 
 // Canonical fetch decorator: attaches the session token on every request when
@@ -584,6 +628,8 @@ declare global {
         tokens: Record<string, { amount: number; name: string }>;
       }>;
       deposit?(input?: { method?: string }): Promise<void>;
+      // Host version 4+: fire the haptic engine; feature-detected.
+      haptics?(input?: { type?: string }): Promise<void>;
     };
     // Legacy marker set by older Bankroll app builds — a presence-only signal
     // used to tell an out-of-date app apart from a standalone browser.
