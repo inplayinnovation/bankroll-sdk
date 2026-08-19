@@ -7,6 +7,10 @@ description: Build, run, and debug Built for Bankroll apps — real-money web ap
 
 A Built for Bankroll app is a web app on your own HTTPS origin, opened inside the Bankroll mobile app. The host supplies verified identity (one person, one account, with a verified age), per-session geolocation, and payments in HSUSD (a $1 stablecoin on Solana). Charges settle on-chain to the address the app's manifest declares. Settlement is final: there are no chargebacks, and mistakes move real money. That is why this skill is mostly rules.
 
+## The guided setup
+
+When the user asks to set up a Bankroll app — for example, "Set up my Bankroll app" — fetch https://docs.joinbankroll.com/build/agents.md and follow its "What the agent does with that" steps in order. Pause at each gate and wait for the user to say continue.
+
 ## Read before you write code
 
 1. Fetch the docs once: https://docs.joinbankroll.com/llms-full.txt (the full reference, ~110 KB; the index is /llms.txt). If the Bankroll MCP server is connected, `search_bankroll` also works.
