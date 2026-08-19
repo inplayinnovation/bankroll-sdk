@@ -5,7 +5,7 @@ description: Build, run, and debug Built for Bankroll apps — real-money web ap
 
 # Bankroll
 
-A Built for Bankroll app is a web app on your own HTTPS origin, opened inside the Bankroll mobile app. The host supplies verified identity (one person, one account, with a verified age), per-session geolocation, and payments in HSUSD (a $1 stablecoin on Solana). Charges settle on-chain to the address the app's manifest declares. Settlement is final: there are no chargebacks, and mistakes move real money. That is why this skill is mostly rules.
+A Built for Bankroll app is a web app on your own HTTPS origin, opened inside the Bankroll mobile app. The host supplies verified identity (one person, one account, with a verified age), per-session geolocation, payments in HSUSD (a $1 stablecoin on Solana), and haptics (`bankroll.haptics({ type })`, decoration that never rejects — see the docs). Charges settle on-chain to the address the app's manifest declares. Settlement is final: there are no chargebacks, and mistakes move real money. That is why this skill is mostly rules.
 
 ## The guided setup
 
