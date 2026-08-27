@@ -5,11 +5,11 @@ description: Build, run, and debug Built for Bankroll apps — real-money web ap
 
 # Bankroll
 
-A Built for Bankroll app is a web app on your own HTTPS origin, opened inside the Bankroll mobile app. The host supplies verified identity (one person, one account, with a verified age), per-session geolocation, payments in HSUSD (a $1 stablecoin on Solana), and haptics (`bankroll.haptics({ type })`, decoration that never rejects — see the docs). Charges settle on-chain to the address the app's manifest declares. Settlement is final: there are no chargebacks, and mistakes move real money. That is why this skill is mostly rules.
+A Built for Bankroll app is a web app on your own HTTPS origin, opened inside the Bankroll mobile app. The host supplies verified identity (one person, one account, with a verified age), per-session geolocation, payments in HSUSD (a one-dollar stablecoin on Solana), and haptics (`bankroll.haptics({ type })`, decoration that never rejects — see the docs). Charges settle on-chain to the address the app's manifest declares. Settlement is final: there are no chargebacks, and mistakes move real money. That is why this skill is mostly rules.
 
 ## The guided setup
 
-When the user asks to set up a Bankroll app — for example, "Set up my Bankroll app" — fetch https://docs.joinbankroll.com/build/agents.md and follow its "What the agent does with that" steps in order. Pause at each gate and wait for the user to say continue.
+When the user asks to set up a Bankroll app — for example, "Set up my Bankroll app" — fetch https://docs.joinbankroll.com/build/agents.md and follow its "What the agent does with that" steps in order. Pause at each gate and wait for the user to say continue. Step 4's QR code must end up scannable **inside your chat reply** — the page says exactly how; never point the user at background-task output, and never send the QR as an image file or attachment, since neither reaches a terminal chat.
 
 ## Read before you write code
 
@@ -38,7 +38,9 @@ The scaffolder downloads the starter, writes `.env.local` (`STORE=fs`, the app n
 ## The dev loop
 
 - `npm run dev` runs `bankroll dev`: it starts the dev server behind a public tunnel and prints a QR code. Scan it, and the app opens inside Bankroll on a phone. The app only fully runs there.
-- The tunnel URL changes on every restart. "Can't open this app" almost always means a dead tunnel. Restart, then scan the new QR.
+- Run it as a background task and leave it running. Its output — the QR included — is never shown to the user; never point them at it.
+- The QR must reach the user **inside your chat reply**: plain monospace glyphs in a fenced code block, the play link as plain text under it. When stdout is not a TTY (any backgrounded run), CLI 0.3+ prints exactly that — re-print it verbatim. Older CLIs print an ANSI QR whose contrast lives in the color codes — unrecoverable as text — so rebuild it: play link = `https://joinbankroll.com/play?url=<URL-encoded tunnel URL>`, QR from the `qrcode-generator` package already in node_modules (`q.createASCII()`; the agents docs page carries the one-liner). Image files and attachments do not render in a terminal chat.
+- The tunnel URL changes on every restart. "Can't open this app" almost always means a dead tunnel. Restart, then put the new QR in chat.
 - The dev signing key lives at `~/.config/bankroll/keypair.json`. The CLI creates it on first use and injects it into the dev server. It receives payments and signs payouts with real mainnet HSUSD. Fund it with cents, not dollars. Never copy it into the project.
 - `npx next dev` (plain localhost) is fine for UI-only work. A browser has no host bridge: `status()` is `'unavailable'`, and token-protected API routes return 401. That is expected, not a bug.
 
