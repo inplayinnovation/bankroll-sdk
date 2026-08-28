@@ -28,9 +28,11 @@ export { requireTreasury, treasuryAddress, treasurySigner } from './treasury';
 export {
   PushError,
   pushAddress,
-  sendPush,
+  notifyAudience,
+  notifyUser,
+  type NotifyAudienceInput,
   type PushErrorCode,
-  type PushInput,
+  type NotifyUserInput,
 } from './push';
 
 export {

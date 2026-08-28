@@ -1,11 +1,12 @@
-// Push notifications: your server asks Bankroll to notify one of your users.
+// Push notifications: your server asks Bankroll to notify your users.
 //
-// Push is a PERMISSIONED capability. Your manifest must declare your push
-// public key in `capabilities.push`, and the manifest must be signed by
-// Bankroll — ask the Bankroll team. Every request is a short-lived JWT signed
-// with your key; Bankroll verifies it against the key your signed manifest
-// attests, checks the target is one of your users, and delivers with your
-// app's name on the title. You can only reach users who have opened your app.
+// Push is a PERMISSIONED capability: your permission is a Bankroll-signed
+// manifest declaring your push public key in `capabilities.push` — ask the
+// Bankroll team. Every request is a short-lived JWT signed with your key;
+// Bankroll verifies it against the key your signed manifest attests and
+// delivers with your app's name on the title. Discrete pushes are gated by
+// your app's Bankroll-managed audience segment when one is configured;
+// broadcasts go to your app's recent-user audience.
 import { createPrivateKey, type KeyObject } from 'node:crypto';
 
 import bs58 from 'bs58';
@@ -19,8 +20,10 @@ const PUSH_KEY_ENV = 'BANKROLL_PUSH_KEY';
 const API_URL_ENV = 'BANKROLL_API_URL';
 const DEFAULT_API_URL = 'https://api.joinbankroll.com';
 const PUSH_PATH = '/api/push';
+const BROADCAST_PATH = '/api/push/broadcast';
 
 const PUSH_TYP = 'bankroll-push+jwt';
+const BROADCAST_TYP = 'bankroll-push-broadcast+jwt';
 const PUSH_AUD = 'bankroll-push';
 const REQUEST_TTL = '60s';
 
@@ -74,6 +77,7 @@ export type PushErrorCode =
   | 'push_not_enabled'
   | 'push_not_declared'
   | 'push_muted'
+  | 'broadcast_not_configured'
   | 'unknown_user'
   | 'not_your_user'
   | 'invalid_title'
@@ -92,7 +96,7 @@ export class PushError extends Error {
   }
 }
 
-export interface PushInput {
+export interface NotifyUserInput {
   /** The recipient — `session.user.wallet` from your verified session. */
   to: string;
   /** Your app's canonical https origin — what your manifest's `sub` claims. */
@@ -109,7 +113,7 @@ export interface PushInput {
  * delivery; throws PushError with the server's reason otherwise. Requires
  * BANKROLL_PUSH_KEY and a Bankroll-signed manifest declaring its public key.
  */
-export async function sendPush(input: PushInput): Promise<void> {
+export async function notifyUser(input: NotifyUserInput): Promise<void> {
   const pushKey = loadPushKey();
   if (!pushKey) throw new Error(`No push key — set ${PUSH_KEY_ENV}`);
 
@@ -141,5 +145,55 @@ export async function sendPush(input: PushInput): Promise<void> {
     const reason = (await response.json().catch(() => ({}))) as { error?: string };
     const code = (reason.error ?? 'unknown') as PushErrorCode;
     throw new PushError(code, `Bankroll refused the push: ${code}`);
+  }
+}
+
+export interface NotifyAudienceInput {
+  /** Your app's canonical https origin — what your manifest's `sub` claims. */
+  origin: string;
+  /** Shown after your app's name. Keep it short; platforms truncate. */
+  title: string;
+  body: string;
+  /** Where the tap lands, as a path on YOUR origin. Defaults to '/'. */
+  path?: string;
+}
+
+/**
+ * Send a push to your app's recent-user audience — no recipient, Bankroll
+ * picks the audience. Resolves when Bankroll accepted it for delivery; throws
+ * PushError with the server's reason otherwise. Requires BANKROLL_PUSH_KEY
+ * and a Bankroll-signed manifest declaring its public key.
+ */
+export async function notifyAudience(input: NotifyAudienceInput): Promise<void> {
+  const pushKey = loadPushKey();
+  if (!pushKey) throw new Error(`No push key — set ${PUSH_KEY_ENV}`);
+
+  const title = input.title.trim();
+  const body = input.body.trim();
+  if (!title) throw new Error('title must not be empty');
+  if (!body) throw new Error('body must not be empty');
+
+  const jwt = await new SignJWT({
+    body,
+    ...(input.path !== undefined ? { path: input.path } : {}),
+    title,
+  })
+    .setProtectedHeader({ alg: 'EdDSA', typ: BROADCAST_TYP })
+    .setIssuer(input.origin)
+    .setAudience(PUSH_AUD)
+    .setIssuedAt()
+    .setExpirationTime(REQUEST_TTL)
+    .sign(pushKey.key);
+
+  const apiUrl = process.env[API_URL_ENV] || DEFAULT_API_URL;
+  const response = await fetch(apiUrl + BROADCAST_PATH, {
+    body: jwt,
+    headers: { 'content-type': 'application/jwt' },
+    method: 'POST',
+  });
+  if (!response.ok) {
+    const reason = (await response.json().catch(() => ({}))) as { error?: string };
+    const code = (reason.error ?? 'unknown') as PushErrorCode;
+    throw new PushError(code, `Bankroll refused the broadcast: ${code}`);
   }
 }
