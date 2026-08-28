@@ -13,13 +13,20 @@ import { PreconditionFailed, type StoreBackend, type StoredJson } from './index'
 
 const ACCESS = 'private' as const;
 
+// get() reports a weak etag — W/"…" — whenever Blob serves the document
+// compressed, which kicks in around 1–2KB. put(ifMatch) compares strongly, so a
+// weak etag handed back to it fails every conditional write on that document,
+// forever. Same bytes, different validator strength: strip the marker so the
+// etag this backend surfaces is always the strong form put() accepts.
+const strongEtag = (etag: string) => etag.replace(/^W\//, '');
+
 export function vercelBlobBackend(): StoreBackend {
   return {
     async readJson<T>(pathname: string): Promise<StoredJson<T> | null> {
       const result = await get(pathname, { access: ACCESS, useCache: false });
       if (!result || result.stream === null) return null;
       const text = await new Response(result.stream).text();
-      return { value: JSON.parse(text) as T, etag: result.blob.etag };
+      return { value: JSON.parse(text) as T, etag: strongEtag(result.blob.etag) };
     },
 
     async writeJson(pathname: string, value: unknown, ifMatch?: string): Promise<void> {
@@ -51,7 +58,7 @@ export function vercelBlobBackend(): StoreBackend {
         // that Blob rejected, nothing of ours has landed.
         if (ifMatch !== undefined) {
           const current = await get(pathname, { access: ACCESS, useCache: false });
-          if (current && current.blob.etag !== ifMatch) {
+          if (current && strongEtag(current.blob.etag) !== ifMatch) {
             throw new PreconditionFailed(pathname, { cause: error });
           }
         }

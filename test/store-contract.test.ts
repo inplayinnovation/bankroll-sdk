@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { PreconditionFailed, type StoreBackend } from '../src/store/index';
+import { PreconditionFailed, type StoreBackend, updateJson } from '../src/store/index';
 import { fsBackend } from '../src/store/fs';
 import { vercelBlobBackend } from '../src/store/vercel';
 
@@ -86,6 +86,24 @@ function contract(backend: StoreBackend) {
     await backend.writeJson(p, { n: 2 }, first!.etag);
     await expect(backend.writeJson(p, { n: 99 }, first!.etag)).rejects.toThrow(PreconditionFailed);
     expect((await backend.readJson<{ n: number }>(p))?.value.n).toBe(2);
+  });
+
+  it('compare-and-swaps a document large enough to be served compressed', async () => {
+    // Blob serves documents past ~1–2KB compressed and reports a weak etag
+    // (W/"…") for them, while put(ifMatch) compares strongly — so CAS worked on
+    // small documents and failed forever once one grew. The pad puts this
+    // document safely past the threshold; updateJson is the caller that
+    // surfaced it, as TooContended with nothing contending.
+    const p = path();
+    await backend.createIfAbsent(p, { n: 0, pad: 'x'.repeat(4096) });
+    const next = await updateJson<{ n: number; pad: string }>(backend, p, (current) => ({
+      ...current,
+      n: current.n + 1,
+    }));
+    expect(next.n).toBe(1);
+    const stored = await backend.readJson<{ n: number; pad: string }>(p);
+    expect(stored?.value.n).toBe(1);
+    expect(stored?.value.pad).toHaveLength(4096);
   });
 
   it('has exactly one winner when many callers compare-and-swap the same document', async () => {
