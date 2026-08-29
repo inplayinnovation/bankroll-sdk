@@ -443,6 +443,15 @@ export type DepositInput = {
    * input.
    */
   method?: string;
+  /**
+   * Flat string key/value data attached to the purchase's processor
+   * pass-through, echoed back verbatim under `webhookInfo` on the app's
+   * settlement webhook (e.g. a marketing ref, an order correlation id).
+   * Attribution and correlation only — nothing that moves money reads it.
+   * The host bounds keys, values, and count; hosts predating the field
+   * ignore it (the deposit simply arrives without it).
+   */
+  webhookInfo?: Record<string, string>;
 };
 
 export type AppTokenBalance = {
@@ -627,7 +636,10 @@ declare global {
         creditsCents: number;
         tokens: Record<string, { amount: number; name: string }>;
       }>;
-      deposit?(input?: { method?: string }): Promise<void>;
+      deposit?(input?: {
+        method?: string;
+        webhookInfo?: Record<string, string>;
+      }): Promise<void>;
       // Host version 4+: fire the haptic engine; feature-detected.
       haptics?(input?: { type?: string }): Promise<void>;
     };
