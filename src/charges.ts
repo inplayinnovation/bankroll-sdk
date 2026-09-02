@@ -4,6 +4,7 @@
 // in what asset, how much, and the memo. Comparing those facts to the order,
 // and storing the signature against replay, is deliberately left to the app:
 // the SDK observes, the app decides.
+import { isMockSignature, mockEnabled, parseMockSignature } from './mock';
 import { rpcUrl } from './rpc';
 
 export const HSUSD_MINT = '4FVaHEubcqws8hKwJSiW8f8CmKGUyMsBxTKUytcGdRvd';
@@ -218,6 +219,22 @@ export async function confirmCharge(
   tx: string,
   options?: ConfirmChargeOptions,
 ): Promise<ConfirmedCharge> {
+  // A signature the mock host made up carries its own facts. Only in
+  // development with BANKROLL_MOCK=1; a production build never reads it.
+  if (mockEnabled() && isMockSignature(tx)) {
+    const facts = parseMockSignature(tx);
+    if (!facts) throw new ConfirmChargeError('not_a_payment', `malformed mock signature ${tx}`);
+    return {
+      signature: tx,
+      payer: facts.payer,
+      payee: facts.payee,
+      mint: facts.mint ?? HSUSD_MINT,
+      amountCents: facts.amountCents,
+      memo: facts.memo,
+      slot: Date.now(),
+    };
+  }
+
   const endpoint = rpcUrl();
 
   const deadline = Date.now() + (options?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
