@@ -8,6 +8,7 @@
 import { headers } from 'next/headers';
 
 import { BANKROLL_TOKEN_HEADER } from './constants';
+import { mockEnabled, mockSession } from './mock';
 import { verifyToken, type BankrollSession } from './server';
 
 // ---------------------------------------------------------------------------
@@ -53,9 +54,20 @@ export class Unauthorized extends Error {
   }
 }
 
-/** The verified session, or null when the token is missing or invalid. */
+/**
+ * The verified session, or null when the token is missing or invalid.
+ *
+ * With BANKROLL_MOCK=1 outside production, a token from `@joinbankroll/sdk/mock`
+ * is accepted too, so the app's routes run under a test's fake host. A
+ * production build never reads the flag.
+ */
 export async function getSession(request: Request): Promise<BankrollSession | null> {
-  return verifyToken(request.headers.get(BANKROLL_TOKEN_HEADER), {
+  const token = request.headers.get(BANKROLL_TOKEN_HEADER);
+  if (mockEnabled()) {
+    const mocked = mockSession(token);
+    if (mocked) return mocked;
+  }
+  return verifyToken(token, {
     // The token is minted for this exact origin, so a token issued for some
     // other app can't be replayed here.
     audience: await getOrigin(),

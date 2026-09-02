@@ -13,6 +13,7 @@ import bs58 from 'bs58';
 
 import { confirmCharge, ConfirmChargeError } from './charges';
 import type { ConfirmChargeOptions, ConfirmedCharge } from './charges';
+import { mockEnabled } from './mock';
 import { rpcUrl } from './rpc';
 
 const REFERENCE_BYTES = 32;
@@ -130,6 +131,10 @@ export async function findChargeByReference(
   reference: string,
   options?: FindChargeOptions,
 ): Promise<ConfirmedCharge | null> {
+  // The mock host settles nothing on-chain, so there is never anything to
+  // recover. Answering "nothing found" keeps a sweep from reaching an RPC.
+  if (mockEnabled()) return null;
+
   const endpoint = rpcUrl();
   const signatures = await fetchSignatures(endpoint, reference, options);
 

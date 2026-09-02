@@ -35,6 +35,17 @@ The scaffolder downloads the starter, writes `.env.local` (`STORE=fs`, the app n
 4. Copy the recovery machinery from the starter: `src/lib/charges.ts`, `src/lib/store.ts`, `src/lib/sweep.ts`, and the three `api/charges` routes. It is MIT-licensed and not yet packaged in the SDK. Do not skip it — it is what finds a payment when the page dies before it reports the signature.
 5. Next.js dev only: add `allowedDevOrigins: ['*.trycloudflare.com']` to `next.config.ts`.
 
+## Testing without a phone
+
+`@joinbankroll/sdk/mock` is a stand-in host. `mockHostScript({ payee })` returns
+JavaScript that defines `window.bankroll` the way the Bankroll app does; hand it
+to Playwright's `addInitScript` and the client SDK reports `ready`, `session()`
+answers, and `pay()` returns a made-up signature. Set `BANKROLL_MOCK=1` on the
+dev server and `getSession` / `confirmCharge` accept that token and those
+signatures, so the app's own routes run end to end with no money moving. The
+flag is ignored in production builds. The starter's `npm run check -- /app`
+does exactly this and fails on any console error, page error, or failed request.
+
 ## The dev loop
 
 - `npm run dev` runs `bankroll dev`: it starts the dev server behind a public tunnel and prints a QR code. Scan it, and the app opens inside Bankroll on a phone. The app only fully runs there.

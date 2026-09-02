@@ -78,6 +78,7 @@ optional entry brings its own peer so you install only what you use.
 | `@joinbankroll/sdk/store` | Durable JSON with an atomic create and compare-and-swap. `./store` is pure interface; `./store/fs` imports only Node builtins; `./store/vercel` is the only module touching `@vercel/blob` (peer, `>= 2.3.0`). |
 | `@joinbankroll/sdk/react` | `useBankrollStatus` / `useBankrollChecked`, `bankrollFetch`, `verifyIdentity`, and a development overlay. Peer: `react >= 18`. |
 | `@joinbankroll/sdk/privy` | Drop-in payout signer for Privy server wallets. Peer: `@privy-io/node`. |
+| `@joinbankroll/sdk/mock` | A stand-in host for tests: `mockHostScript()` defines `window.bankroll` in a headless browser, and with `BANKROLL_MOCK=1` outside production `getSession` and `confirmCharge` accept its token and signatures. A production build never reads the flag. |
 
 Every peer is optional. ESM only. Types are bundled.
 
