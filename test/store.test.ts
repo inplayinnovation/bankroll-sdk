@@ -65,6 +65,22 @@ describe('fsBackend', () => {
     expect(await store.readJson('missing.json')).toBeNull();
   });
 
+  // A mock signature carries the whole charge, memo included, so a charge id
+  // can run past the 255-byte filename cap. The document must still round-trip
+  // and list, under a short stable name, without colliding with its neighbour.
+  it('files a document whose name would exceed the filename limit', async () => {
+    type Memo = { memo: string };
+    const long = (memo: string) => `000000000000001-mock-${'x'.repeat(220)}${memo}.json`;
+    await store.writeJson(`charges/w/${long('a')}`, { memo: 'a' });
+    await store.writeJson(`charges/w/${long('b')}`, { memo: 'b' });
+
+    expect((await store.readJson<Memo>(`charges/w/${long('a')}`))?.value).toEqual({ memo: 'a' });
+    expect((await store.readJson<Memo>(`charges/w/${long('b')}`))?.value).toEqual({ memo: 'b' });
+    const listed = await store.list<Memo>('charges/w');
+    expect(listed.items.map((item) => item.memo).sort()).toEqual(['a', 'b']);
+    expect(await store.createIfAbsent(`charges/w/${long('a')}`, { memo: 'again' })).toBe(false);
+  });
+
   // Recording "this signature is spent" has to be something two concurrent
   // requests cannot both succeed at.
   it('lets exactly one of many concurrent creates win', async () => {

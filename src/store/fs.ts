@@ -18,6 +18,24 @@ const ENCODING = 'utf8' as const;
 const EXCLUSIVE_CREATE = 'wx' as const;
 const DEFAULT_ENVIRONMENT = 'development';
 const ROOT_DIRECTORY = 'bankroll';
+// Filesystems cap a single name at 255 bytes, and the temporary name written
+// beside a document adds about fifty. A charge is filed under its slot and
+// signature, and a mock signature carries the whole charge, memo included, so
+// a long memo can push the name past the cap. Such a segment is filed under a
+// stable short name instead: its head, which keeps the slot ordering, then a
+// hash of the whole.
+const MAX_SEGMENT_BYTES = 200;
+const SEGMENT_HEAD_CHARS = 48;
+const SEGMENT_HASH_CHARS = 16;
+const DOCUMENT_EXTENSION = '.json';
+
+function shortSegment(segment: string): string {
+  if (Buffer.byteLength(segment, ENCODING) <= MAX_SEGMENT_BYTES) return segment;
+  const extension = segment.endsWith(DOCUMENT_EXTENSION) ? DOCUMENT_EXTENSION : '';
+  const stem = extension ? segment.slice(0, -extension.length) : segment;
+  const hash = createHash('sha256').update(stem).digest('hex').slice(0, SEGMENT_HASH_CHARS);
+  return `${stem.slice(0, SEGMENT_HEAD_CHARS)}-${hash}${extension}`;
+}
 
 /**
  * Where a default-rooted store lives, relative to the project.
@@ -82,7 +100,7 @@ export function fsBackend(root?: string): StoreBackend {
   // base58 today, but a traversal here would let a caller write anywhere on the
   // developer's disk, so containment is checked rather than assumed.
   function fileFor(pathname: string): string {
-    const file = resolve(base, pathname);
+    const file = resolve(base, pathname.split('/').map(shortSegment).join('/'));
     if (file !== base && !file.startsWith(base + '/')) {
       throw new Error(`refusing to store outside ${base}: ${pathname}`);
     }
