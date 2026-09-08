@@ -7,6 +7,7 @@
 // fails loudly rather than shipping the wrong thing to a browser.
 import { headers } from 'next/headers';
 
+import { appAddress } from './app-auth';
 import { BANKROLL_TOKEN_HEADER } from './constants';
 import { mockEnabled, mockSession } from './mock';
 import { verifyToken, type BankrollSession } from './server';
@@ -107,6 +108,8 @@ export interface ManifestApp {
    * so an app that hasn't finished setup advertises what it can actually honor.
    */
   payments: () => string | null;
+  /** App signing public key. Defaults to BANKROLL_APP_KEY or legacy BANKROLL_PUSH_KEY. */
+  appKey?: () => string | null;
   /**
    * Where your users get help. Bankroll offers it in the app's own menu, and
    * opening it hands the URL to the operating system — so a help page, a
@@ -132,12 +135,11 @@ export interface ManifestApp {
    */
   iconDigest?: () => string | null;
   /**
-   * The app's push public key — `pushAddress()` from the server entry.
-   * Declaring it is half of enabling push; the other half is Bankroll signing
-   * your manifest, which is what makes the declaration count. Omitted from the
-   * payload when it resolves to null.
+   * Consent to push notifications. A legacy public key remains accepted;
+   * new apps can return true and authenticate with the top-level appKey.
+   * Bankroll must sign the manifest before push is enabled.
    */
-  push?: () => string | null;
+  push?: () => boolean | string | null;
   /**
    * The tokens this app issues, keyed by mint address.
    *
@@ -206,6 +208,7 @@ export function manifestRoute(app: ManifestApp): (request?: Request) => Promise<
 
     const name = app.name();
     const payments = app.payments();
+    const appKey = (app.appKey ?? appAddress)();
     const push = app.push?.();
     const appTokens = usableTokens(app.appTokens?.() ?? {});
     const supportUrl = app.supportUrl?.()?.trim();
@@ -215,6 +218,7 @@ export function manifestRoute(app: ManifestApp): (request?: Request) => Promise<
     // from is the proof, not a signature.
     const header = { alg: 'none', typ: 'bankroll-app-manifest+jwt' };
     const payload = {
+      ...(appKey ? { appKey } : {}),
       // Omitted entirely when the app issues no tokens: an absent claim means
       // only HSUSD may settle its charges, which is not the same as an empty one.
       ...(Object.keys(appTokens).length > 0 ? { appTokens } : {}),

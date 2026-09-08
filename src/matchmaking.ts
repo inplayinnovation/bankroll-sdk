@@ -1,0 +1,180 @@
+import { loadAppKey, signAppToken } from './app-auth';
+
+export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
+export interface Queue {
+  key: string;
+  size: 2;
+  rating?: { initial: number; widenPerSecond: number; max?: number };
+}
+export interface TicketInput<Payload extends Json = Json> {
+  /** Caller-chosen ID, unique across this app. Never reuse it for another entry. */
+  id: string;
+  player: string;
+  queue: Queue;
+  /** Proposed conditions. A joining entry adopts the waiting entry's payload. */
+  payload: Payload;
+  rating?: number;
+  /** Optional app-selected matching cutoff, in epoch milliseconds. */
+  expiresAt?: number;
+}
+export interface Admission<Payload extends Json = Json> {
+  input: TicketInput<Payload>;
+  createdAt: number;
+  payload: Payload;
+}
+export interface Match<Payload extends Json = Json> {
+  id: string;
+  queue: string;
+  matchedAt: number;
+  payload: Payload;
+  tickets: [Admission<Payload>, Admission<Payload>];
+}
+export type Ticket<Payload extends Json = Json> = { id: string } & (
+  | { state: 'waiting'; admission: Admission<Payload> }
+  | { state: 'matched'; admission: Admission<Payload>; match: Match<Payload> }
+  | { state: 'cancelled'; admission: Admission<Payload> | null; reason: 'requested' | 'expired'; cancelledAt: number }
+);
+export interface TicketQuery { player?: string; id?: string; cursor?: string }
+export interface TicketPage<Payload extends Json = Json> { tickets: Ticket<Payload>[]; nextCursor: string | null }
+export type MatchmakingRequest<Payload extends Json = Json> =
+  | { operation: 'createTicket'; input: TicketInput<Payload> }
+  | { operation: 'listTickets'; input: TicketQuery }
+  | { operation: 'cancelTicket'; input: { id: string } };
+export interface Matchmaking<Payload extends Json = Json> {
+  /** Identical retries return current state; changed fields conflict. Matches are final. */
+  createTicket(input: TicketInput<Payload>): Promise<Ticket<Payload>>;
+  /** App-wide discovery, including terminal tickets. Follow nextCursor to recover lost IDs. */
+  listTickets(query?: TicketQuery): Promise<TicketPage<Payload>>;
+  /** Atomic against pairing. Unknown IDs become permanent cancellation tombstones. */
+  cancelTicket(id: string): Promise<Extract<Ticket<Payload>, { state: 'matched' | 'cancelled' }>>;
+}
+export interface MatchmakingOptions {
+  /** Canonical public HTTPS origin attested by the app's signed manifest. */
+  origin: string;
+  /** Defaults to BANKROLL_API_URL, then https://api.joinbankroll.com. */
+  apiUrl?: string;
+  /** Base58 Ed25519 64-byte app secret; defaults to BANKROLL_APP_KEY, then BANKROLL_PUSH_KEY. */
+  key?: string;
+}
+export type MatchmakingErrorCode = 'unauthenticated' | 'app_not_verified' | 'invalid_argument'
+  | 'ticket_conflict' | 'queue_conflict' | 'unavailable' | 'invalid_response';
+export class MatchmakingError extends Error {
+  constructor(readonly code: MatchmakingErrorCode, message: string, readonly status: number | null = null) {
+    super(message);
+    this.name = 'MatchmakingError';
+  }
+}
+const SERVER_CODES = new Set<MatchmakingErrorCode>([
+  'unauthenticated', 'app_not_verified', 'invalid_argument', 'ticket_conflict', 'queue_conflict', 'unavailable',
+]);
+const invalid = (): never => { throw new MatchmakingError('invalid_argument', 'Matchmaking input must contain only plain, finite JSON values'); };
+const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+// Copy synchronously before signing yields. Reject everything JSON would omit,
+// transform, or invoke (including sparse arrays, accessors and toJSON methods).
+function snapshot(value: unknown, ancestors = new Set<object>()): Json {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean' || finite(value)) return value;
+  if (typeof value !== 'object' || ancestors.has(value)) return invalid();
+  const array = Array.isArray(value);
+  if (!array && Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return invalid();
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys = Reflect.ownKeys(descriptors);
+  if (array && keys.length !== value.length + 1) return invalid();
+  ancestors.add(value);
+  try {
+    const entries: [string, Json][] = [];
+    for (const key of keys) {
+      if (array && key === 'length') continue;
+      if (typeof key !== 'string') return invalid();
+      const descriptor = descriptors[key]!;
+      if (!descriptor.enumerable || !('value' in descriptor)) return invalid();
+      if (array && (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= value.length)) return invalid();
+      entries.push([key, snapshot(descriptor.value, ancestors)]);
+    }
+    return array ? entries.map(([, item]) => item) : Object.fromEntries(entries);
+  } finally { ancestors.delete(value); }
+}
+function endpoint(value: string, issuer: boolean): string {
+  try {
+    const url = new URL(value);
+    const host = url.hostname;
+    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(host);
+    if (url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error();
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback && !issuer)) throw new Error();
+    if (issuer && (url.origin !== value || !host.includes('.') || host.startsWith('[')
+      || /^\d+\.\d+\.\d+\.\d+$/.test(host) || ['.localhost', '.local', '.internal', '.home.arpa'].some((suffix) => host.endsWith(suffix)))) throw new Error();
+    return url.origin;
+  } catch {
+    throw new MatchmakingError('invalid_argument', issuer ? 'origin must be a canonical public HTTPS origin' : 'apiUrl must be an HTTPS origin or loopback HTTP origin');
+  }
+}
+function admission(value: unknown): value is Admission {
+  if (!record(value) || !record(value.input) || !record(value.input.queue)) return false;
+  return typeof value.input.id === 'string' && typeof value.input.player === 'string'
+    && typeof value.input.queue.key === 'string' && value.input.queue.size === 2
+    && 'payload' in value.input && 'payload' in value && finite(value.createdAt);
+}
+function ticket(value: unknown): value is Ticket {
+  if (!record(value) || typeof value.id !== 'string') return false;
+  if (value.state === 'cancelled') return (value.admission === null || (admission(value.admission) && value.admission.input.id === value.id))
+    && (value.reason === 'requested' || value.reason === 'expired') && finite(value.cancelledAt);
+  if (!admission(value.admission) || value.admission.input.id !== value.id) return false;
+  if (value.state === 'waiting') return true;
+  if (value.state !== 'matched' || !record(value.match)) return false;
+  return typeof value.match.id === 'string' && typeof value.match.queue === 'string' && finite(value.match.matchedAt)
+    && 'payload' in value.match && Array.isArray(value.match.tickets) && value.match.tickets.length === 2
+    && value.match.tickets.every(admission);
+}
+
+/** Server-only client. Calls are never retried: an unavailable/invalid_response
+ * result may hide a committed operation. Retry the same input or discover it. */
+export function createMatchmaking<Payload extends Json = Json>(options: MatchmakingOptions): Matchmaking<Payload> {
+  const origin = endpoint(options.origin, true);
+  const apiUrl = endpoint(options.apiUrl ?? process.env.BANKROLL_API_URL ?? 'https://api.joinbankroll.com', false);
+  const explicitKey = options.key;
+  async function request(operation: MatchmakingRequest['operation'], input: unknown): Promise<unknown> {
+    let body: string;
+    let sent: Json;
+    try { sent = snapshot(input); body = JSON.stringify({ operation, input: sent }); }
+    catch { return invalid(); }
+    let token: string;
+    try {
+      const credential = loadAppKey(explicitKey);
+      if (!credential) throw new Error();
+      token = await signAppToken(origin, credential.key);
+    } catch { throw new MatchmakingError('unauthenticated', 'A valid app credential is required'); }
+    const signal = AbortSignal.timeout(30_000);
+    let response: Response;
+    try {
+      response = await fetch(`${apiUrl}/api/matchmaking`, {
+        method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body, cache: 'no-store', redirect: 'error', signal,
+      });
+    } catch { throw new MatchmakingError('unavailable', 'Matchmaking outcome is unknown; retry the same input or list tickets'); }
+    let result: unknown;
+    try { result = await response.json(); }
+    catch {
+      throw new MatchmakingError(signal.aborted ? 'unavailable' : 'invalid_response', 'Matchmaking reply could not be read; outcome is unknown', response.status);
+    }
+    if (!response.ok) {
+      const code = record(result) ? result.error : undefined;
+      if (typeof code === 'string' && SERVER_CODES.has(code as MatchmakingErrorCode)) {
+        throw new MatchmakingError(code as MatchmakingErrorCode, `Bankroll refused matchmaking: ${code}`, response.status);
+      }
+      throw new MatchmakingError('invalid_response', 'Unrecognized matchmaking refusal; outcome is unknown', response.status);
+    }
+    try { snapshot(result); }
+    catch { throw new MatchmakingError('invalid_response', 'Invalid JSON in matchmaking reply; outcome is unknown', response.status); }
+    const valid = operation === 'listTickets'
+      ? record(result) && Array.isArray(result.tickets) && result.tickets.every(ticket) && (result.nextCursor === null || typeof result.nextCursor === 'string')
+      : ticket(result) && record(sent) && result.id === sent.id && (operation !== 'cancelTicket' || result.state !== 'waiting');
+    if (!valid) throw new MatchmakingError('invalid_response', 'Malformed matchmaking reply; outcome is unknown', response.status);
+    return result;
+  }
+  return {
+    createTicket: (input) => request('createTicket', input) as Promise<Ticket<Payload>>,
+    listTickets: (query = {}) => request('listTickets', query) as Promise<TicketPage<Payload>>,
+    cancelTicket: (id) => request('cancelTicket', { id }) as ReturnType<Matchmaking<Payload>['cancelTicket']>,
+  };
+}

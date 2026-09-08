@@ -32,11 +32,14 @@ const BROADCAST_INPUT = {
 };
 
 beforeEach(() => {
+  delete process.env.BANKROLL_APP_KEY;
   process.env.BANKROLL_PUSH_KEY = SECRET;
   fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) });
 });
 
 afterEach(() => {
+  delete process.env.BANKROLL_APP_KEY;
+  vi.useRealTimers();
   delete process.env.BANKROLL_PUSH_KEY;
   delete process.env.BANKROLL_API_URL;
   vi.clearAllMocks();
@@ -142,5 +145,80 @@ describe('notifyAudience', () => {
       code: 'broadcast_not_configured',
       name: 'PushError',
     });
+  });
+});
+
+const sharedKeys = generateKeyPairSync('ed25519');
+const sharedJwk = sharedKeys.privateKey.export({ format: 'jwk' });
+const SHARED_SECRET = bs58.encode(Buffer.concat([
+  Buffer.from(sharedJwk.d!, 'base64url'), Buffer.from(sharedJwk.x!, 'base64url'),
+]));
+
+describe('push with shared app authentication', () => {
+  it.each([
+    {
+      name: 'unicast', path: '/api/push',
+      send: () => notifyUser({ ...INPUT, title: '  Match ready  ', path: '/match/9' }),
+      body: { to: INPUT.to, title: INPUT.title, body: INPUT.body, path: '/match/9' },
+    },
+    {
+      name: 'broadcast', path: '/api/push/broadcast',
+      send: () => notifyAudience({ ...BROADCAST_INPUT, body: ' Season two is live. ' }),
+      body: { title: BROADCAST_INPUT.title, body: BROADCAST_INPUT.body },
+    },
+  ])('sends $name as JSON with a fresh identity-only Bearer token', async ({ send, path, body }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-07T12:00:00Z'));
+    process.env.BANKROLL_APP_KEY = SHARED_SECRET;
+    process.env.BANKROLL_API_URL = 'https://api.example';
+    expect(pushAddress()).toBe(bs58.encode(Buffer.from(sharedJwk.x!, 'base64url')));
+    for (let i = 0; i < 2; i++) {
+      await send();
+      const [url, init] = fetchMock.mock.calls[i] as [string, RequestInit];
+      expect(url).toBe(`https://api.example${path}`);
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body as string)).toEqual(body);
+      const headers = new Headers(init.headers);
+      expect(headers.get('content-type')).toBe('application/json');
+      const authorization = headers.get('authorization');
+      expect(authorization).toMatch(/^Bearer /);
+      const token = authorization!.slice(7);
+      const { payload, protectedHeader } = await jwtVerify(token, sharedKeys.publicKey, {
+        issuer: INPUT.origin, audience: 'bankroll-api',
+      });
+      expect(protectedHeader).toEqual({ alg: 'EdDSA', typ: 'bankroll-app-auth+jwt' });
+      const now = Math.floor(Date.now() / 1000);
+      expect(payload).toEqual({ iss: INPUT.origin, aud: 'bankroll-api', iat: now, exp: now + 60 });
+      await expect(jwtVerify(token, keys.publicKey)).rejects.toThrow();
+      vi.setSystemTime(Date.now() + 61_000);
+    }
+  });
+
+  it('signs with the new app key after rotation', async () => {
+    process.env.BANKROLL_APP_KEY = SECRET;
+    await notifyUser(INPUT);
+    process.env.BANKROLL_APP_KEY = SHARED_SECRET;
+    await notifyAudience(BROADCAST_INPUT);
+    const init = fetchMock.mock.calls[1]![1] as RequestInit;
+    const token = new Headers(init.headers).get('authorization')!.slice(7);
+    await expect(jwtVerify(token, sharedKeys.publicKey)).resolves.toBeDefined();
+    await expect(jwtVerify(token, keys.publicKey)).rejects.toThrow();
+  });
+
+  it.each(['', 'not-a-base58-key', bs58.encode(Buffer.concat([
+    seed, Buffer.from(sharedJwk.x!, 'base64url'),
+  ]))])('rejects an invalid app key instead of using the configured legacy key', async (secret) => {
+    process.env.BANKROLL_APP_KEY = secret;
+    await expect(notifyUser(INPUT)).rejects.toThrow(/^Invalid app key:/);
+    await expect(notifyAudience(BROADCAST_INPUT)).rejects.toThrow(/^Invalid app key:/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('preserves generic auth errors and never retries through legacy push', async () => {
+    process.env.BANKROLL_APP_KEY = SHARED_SECRET;
+    fetchMock.mockResolvedValue({ ok: false, json: async () => ({ error: 'app_not_verified' }) });
+    await expect(notifyUser(INPUT)).rejects.toMatchObject({ name: 'PushError', code: 'app_not_verified' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(new Headers((fetchMock.mock.calls[0]![1] as RequestInit).headers).has('authorization')).toBe(true);
   });
 });

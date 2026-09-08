@@ -1,5 +1,8 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { generateKeyPairSync } from 'node:crypto';
+
+import bs58 from 'bs58';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BANKROLL_TOKEN_HEADER } from '../src/constants';
 import {
@@ -106,7 +109,11 @@ describe('sessions', () => {
 describe('manifestRoute', () => {
   beforeEach(() => {
     state.host = 'app.example';
+    vi.stubEnv('BANKROLL_APP_KEY', undefined);
+    vi.stubEnv('BANKROLL_PUSH_KEY', undefined);
   });
+
+  afterEach(() => vi.unstubAllEnvs());
 
   it('serves an unsecured JWT bound to the request origin', async () => {
     const response = await manifestRoute(APP)();
@@ -160,6 +167,26 @@ describe('manifestRoute', () => {
       await (await manifestRoute({ ...APP, push: () => 'Pu5hKey' })()).text(),
     );
     expect(withKey.capabilities).toEqual({ push: 'Pu5hKey', session: true });
+  });
+
+  it.each(['BANKROLL_APP_KEY', 'BANKROLL_PUSH_KEY'])(
+    'declares the app public key from %s without adding a capability', async (env) => {
+      const key = generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' });
+      const publicKey = Buffer.from(key.x!, 'base64url');
+      vi.stubEnv(env, bs58.encode(Buffer.concat([Buffer.from(key.d!, 'base64url'), publicKey])));
+      const manifest = decodeManifest(await (await manifestRoute(APP)()).text());
+      expect(manifest.appKey).toBe(bs58.encode(publicKey));
+      expect(manifest.capabilities).toEqual({ session: true });
+    },
+  );
+
+  it('omits an absent appKey and accepts push consent with an explicit public key', async () => {
+    expect(decodeManifest(await (await manifestRoute(APP)()).text())).not.toHaveProperty('appKey');
+    const manifest = decodeManifest(await (await manifestRoute({
+      ...APP, appKey: () => 'PublicKey', push: () => true,
+    })()).text());
+    expect(manifest.appKey).toBe('PublicKey');
+    expect(manifest.capabilities).toEqual({ session: true, push: true });
   });
 
   // The signature covers exact bytes; the route may not touch them.

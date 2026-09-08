@@ -4,6 +4,8 @@
 // it depends only on `jose` and never imports the client half of the SDK.
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
+export { appAddress } from './app-auth';
+
 export {
   BASE_UNITS_PER_CENT,
   ConfirmChargeError,
