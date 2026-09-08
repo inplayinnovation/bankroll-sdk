@@ -1,6 +1,6 @@
 # @joinbankroll/sdk
 
-Typed client for **Build on Bankroll** apps — a thin wrapper over the `window.bankroll` bridge the Bankroll app injects, plus the server half: session-token verification, charge confirmation, and payouts.
+Typed client for **Build on Bankroll** apps — a thin wrapper over the `window.bankroll` bridge the Bankroll app injects, plus server helpers for session-token verification, payments, app authentication, notifications, and matchmaking.
 
 ```
 npm install @joinbankroll/sdk
@@ -53,10 +53,14 @@ Everything lives there and stays current:
 [Quickstart](https://docs.joinbankroll.com/build/quickstart) ·
 [The session token](https://docs.joinbankroll.com/build/session) ·
 [The manifest](https://docs.joinbankroll.com/build/manifest) ·
+[Getting verified](https://docs.joinbankroll.com/build/verified) ·
+[App authentication](https://docs.joinbankroll.com/build/app-authentication) ·
 [Payments](https://docs.joinbankroll.com/build/payments) ·
 [Paying a user](https://docs.joinbankroll.com/build/payouts) ·
 [App tokens](https://docs.joinbankroll.com/build/app-tokens) ·
-[Balances and deposits](https://docs.joinbankroll.com/build/balances)
+[Balances and deposits](https://docs.joinbankroll.com/build/balances) ·
+[Notifications](https://docs.joinbankroll.com/build/push) ·
+[Matchmaking](https://docs.joinbankroll.com/build/matchmaking)
 
 Helpers: [Next.js](https://docs.joinbankroll.com/build/next) ·
 [The store](https://docs.joinbankroll.com/build/store) ·
@@ -73,7 +77,8 @@ optional entry brings its own peer so you install only what you use.
 | Entry | What it is |
 |---|---|
 | `@joinbankroll/sdk` | Browser client. No runtime imports — none of the server half's dependencies reach the browser bundle. SSR-safe. |
-| `@joinbankroll/sdk/server` | Token verification, charge confirmation, payouts, treasury. Node ≥ 20; depends on [jose](https://github.com/panva/jose) plus exact-pinned `@solana/web3.js` (no version ranges on the money path). Never imports the client. |
+| `@joinbankroll/sdk/server` | Token verification, charge confirmation, payouts, treasury, app public key, and notifications. Node ≥ 20; depends on [jose](https://github.com/panva/jose) plus exact-pinned `@solana/web3.js` (no version ranges on the money path). Never imports the client. |
+| `@joinbankroll/sdk/matchmaking` | Server client for verified apps: `createTicket`, `listTickets`, `cancelTicket`. Recoverable entries, final head-to-head matches, atomic cancellation. |
 | `@joinbankroll/sdk/next` | Server helpers for Next: `getOrigin`, `getSession` / `requireSession`, `requireIdentity`, `manifestRoute`. Server-only — importing it from a client bundle throws. Peer: `next >= 15`. |
 | `@joinbankroll/sdk/store` | Durable JSON with an atomic create and compare-and-swap. `./store` is pure interface; `./store/fs` imports only Node builtins; `./store/vercel` is the only module touching `@vercel/blob` (peer, `>= 2.3.0`). |
 | `@joinbankroll/sdk/react` | `useBankrollStatus` / `useBankrollChecked`, `bankrollFetch`, `verifyIdentity`, and a development overlay. Peer: `react >= 18`. |
