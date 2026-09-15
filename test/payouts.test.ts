@@ -485,6 +485,21 @@ describe('pay', () => {
       expect(Transaction.from(Buffer.from(signed.transaction, 'base64')).verifySignatures()).toBe(true);
     });
 
+    it('buildPayout rejects a reference the payout already carries, before touching the RPC', async () => {
+      const server = await serve(happyHandlers());
+
+      // The recipient's own address would be folded into its existing entry
+      // by the message compiler; a lookup by it would return the recipient's
+      // whole history, not this payout.
+      await expect(
+        buildPayout({ to: RECIPIENT.toBase58(), amountCents: 750, reference: RECIPIENT.toBase58() }),
+      ).rejects.toThrow(/reference must not be an account the payout already carries/);
+      await expect(
+        buildPayout({ to: RECIPIENT.toBase58(), amountCents: 750, reference: HSUSD_MINT }),
+      ).rejects.toThrow(/already carries/);
+      expect(server.requests).toHaveLength(0);
+    });
+
     it('buildPayout rejects a malformed reference before touching the RPC', async () => {
       const server = await serve(happyHandlers());
 

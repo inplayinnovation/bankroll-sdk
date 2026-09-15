@@ -292,6 +292,15 @@ export async function buildPayout(
   const treasuryAta = getAssociatedTokenAddressSync(mint, treasury);
   // Smart-contract wallets are off-curve owners; they are still payable.
   const recipientAta = getAssociatedTokenAddressSync(mint, recipient, true);
+  // A reference naming an account the payout already carries is not a
+  // reference: the message compiler folds it into that account's entry, and a
+  // lookup by it would answer with that account's whole history.
+  if (reference !== undefined) {
+    const carried = [treasury, treasuryAta, mint, recipient, recipientAta];
+    if (carried.some((key) => key.equals(reference!))) {
+      throw new Error('reference must not be an account the payout already carries');
+    }
+  }
 
   const connection = getConnection();
   let latest: { blockhash: string; lastValidBlockHeight: number };
