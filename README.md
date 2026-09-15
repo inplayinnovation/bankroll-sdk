@@ -54,6 +54,20 @@ const built = await buildPayout({ to: session.user.wallet, amountCents: 2500, re
 const found = await findPayoutByReference(reference) // { signature, slot, failed } | null
 ```
 
+```ts
+// A Bankroll server wallet (in-app builder apps, or provisioned by Bankroll)?
+// Explicit: pass the signer where you pay. It defaults its inputs from the
+// four env lines provisioning printed — BANKROLL_PAYEE, BANKROLL_DELEGATED_KEY,
+// BANKROLL_DELEGATED_WALLET_ID, BANKROLL_PRIVY_APP_ID — and advertise
+// BANKROLL_PAYEE as your manifest's payment address. The app signs each payout
+// request with its own key; Bankroll's relay adds Privy's credentials and
+// Privy's enclave enforces the wallet's policy, sponsors and broadcasts. It
+// signs at send time, so keep a reference, as above.
+import { delegatedPrivySigner } from '@joinbankroll/sdk/server'
+const signer = delegatedPrivySigner({ idempotencyKey: `payout-${orderId}` })
+await pay({ to: session.user.wallet, amountCents: 2500 }, { signer })
+```
+
 ## 📚 [Read the docs →](https://docs.joinbankroll.com/build/overview)
 
 Everything lives there and stays current:

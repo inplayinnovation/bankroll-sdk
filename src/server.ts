@@ -30,6 +30,13 @@ export { PUBLIC_MAINNET_RPC, rpcUrl, usingPublicRpc } from './rpc';
 export { requireTreasury, treasuryAddress, treasurySigner } from './treasury';
 
 export {
+  DelegatedPrivySignerError,
+  delegatedPrivySigner,
+  type DelegatedPrivySignerErrorCode,
+  type DelegatedPrivySignerOptions,
+} from './delegated';
+
+export {
   PushError,
   pushAddress,
   notifyAudience,
