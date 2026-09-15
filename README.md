@@ -45,6 +45,13 @@ import { privySigner } from '@joinbankroll/sdk/privy' // needs @privy-io/node (o
 
 const signer = await privySigner({ idempotencyKey: `payout-${orderId}` })
 await pay({ to: session.user.wallet, amountCents: 2500 }, { signer })
+
+// A sponsoring signer can't know the signature before the send — store a
+// reference with the row instead, and find the landed payout by it:
+const reference = createReference()
+const built = await buildPayout({ to: session.user.wallet, amountCents: 2500, reference }, { signer })
+// persist reference + built.transaction, sendPayout, and on a stuck row:
+const found = await findPayoutByReference(reference) // { signature, slot, failed } | null
 ```
 
 ## 📚 [Read the docs →](https://docs.joinbankroll.com/build/overview)

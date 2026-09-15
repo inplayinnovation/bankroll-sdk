@@ -5,7 +5,8 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { BASE_UNITS_PER_CENT, ConfirmChargeError, HSUSD_MINT } from '../src/charges';
-import { createReference, findChargeByReference } from '../src/references';
+import { PayError } from '../src/payouts';
+import { createReference, findChargeByReference, findPayoutByReference } from '../src/references';
 
 const REFERENCE = 'GgRva3ZaFuqDDVxr8CDsFcSf7ETNqQFJRhc4Y5nqsFhk';
 const PAYER = 'PayerWa11etAddress1111111111111111111111111';
@@ -194,5 +195,88 @@ describe('findChargeByReference', () => {
       before: NEWER,
       until: OLDEST,
     });
+  });
+});
+
+
+describe('findPayoutByReference', () => {
+  let rpc: RpcServer | undefined;
+  const savedEnv = { rpc: process.env.SOLANA_RPC_URL, mock: process.env.BANKROLL_MOCK };
+
+  afterEach(async () => {
+    if (rpc) await rpc.close();
+    rpc = undefined;
+    if (savedEnv.rpc === undefined) delete process.env.SOLANA_RPC_URL;
+    else process.env.SOLANA_RPC_URL = savedEnv.rpc;
+    if (savedEnv.mock === undefined) delete process.env.BANKROLL_MOCK;
+    else process.env.BANKROLL_MOCK = savedEnv.mock;
+  });
+
+  async function serve(replies: RpcReply[]): Promise<RpcServer> {
+    rpc = await startRpcServer(replies);
+    process.env.SOLANA_RPC_URL = rpc.url;
+    return rpc;
+  }
+
+  it('returns null while nothing has touched the reference', async () => {
+    await serve([rpcResult([])]);
+    await expect(findPayoutByReference(REFERENCE)).resolves.toBeNull();
+  });
+
+  // The RPC answers newest-first; the attempt you sent is the first
+  // transaction ever to touch a reference nobody could guess — and a landed,
+  // failed attempt is exactly what makes a fresh one safe, so it is reported.
+  it('returns the oldest transaction, failed ones included, as the signature to confirm', async () => {
+    const server = await serve([
+      rpcResult([
+        { signature: NEWER, slot: 2, err: null },
+        { signature: OLDEST, slot: 1, err: { InstructionError: [0, 'Custom'] } },
+      ]),
+    ]);
+
+    const found = await findPayoutByReference(REFERENCE);
+
+    expect(found).toEqual({ signature: OLDEST, slot: 1, failed: true });
+    // One read of the chain: a payout is judged by confirmPayout, not parsed here.
+    expect(server.requests).toHaveLength(1);
+    expect(server.requests[0].method).toBe('getSignaturesForAddress');
+  });
+
+  it('reports a landed payout as not failed', async () => {
+    await serve([rpcResult([{ signature: OLDEST, slot: 7, err: null }])]);
+
+    await expect(findPayoutByReference(REFERENCE)).resolves.toEqual({
+      signature: OLDEST,
+      slot: 7,
+      failed: false,
+    });
+  });
+
+  // A failure to look is not a negative answer.
+  it('propagates an RPC failure as a PayError rather than reporting no payout', async () => {
+    await serve([{ status: 500, body: {} }]);
+
+    const error = await findPayoutByReference(REFERENCE).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(PayError);
+    expect((error as PayError).code).toBe('rpc_error');
+  });
+
+  it('reads one full page, newest-first from the RPC, and takes the oldest', async () => {
+    const server = await serve([rpcResult([])]);
+
+    await findPayoutByReference(REFERENCE);
+
+    expect(server.requests[0].method).toBe('getSignaturesForAddress');
+    expect(server.requests[0].params[0]).toBe(REFERENCE);
+    expect(server.requests[0].params[1]).toMatchObject({ commitment: 'confirmed', limit: 1000 });
+  });
+
+  it('answers null under the mock host without reaching an RPC', async () => {
+    const server = await serve([rpcResult([{ signature: OLDEST, slot: 1, err: null }])]);
+    process.env.BANKROLL_MOCK = '1';
+
+    await expect(findPayoutByReference(REFERENCE)).resolves.toBeNull();
+    expect(server.requests).toHaveLength(0);
   });
 });

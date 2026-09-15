@@ -460,6 +460,40 @@ describe('pay', () => {
       expect(server.requests.map((r) => r.method)).toEqual(['getLatestBlockhash']);
     });
 
+    it('buildPayout carries a reference on the transfer as an inert read-only key', async () => {
+      await serve(happyHandlers());
+      const reference = Keypair.generate().publicKey;
+
+      const built = await buildPayout({
+        to: RECIPIENT.toBase58(),
+        amountCents: 750,
+        memo: 'o:1',
+        reference: reference.toBase58(),
+      });
+
+      const tx = Transaction.from(Buffer.from(built.transaction, 'base64'));
+      const transfer = tx.instructions[1]!;
+      // The four keys transferChecked needs, then the reference: the key
+      // getSignaturesForAddress will index the landed transaction under.
+      expect(transfer.keys).toHaveLength(5);
+      const extra = transfer.keys[4]!;
+      expect(extra.pubkey.equals(reference)).toBe(true);
+      expect(extra.isSigner).toBe(false);
+      expect(extra.isWritable).toBe(false);
+      // Still a valid, signable payout: the Token program ignores extra keys.
+      const signed = signPayout(built.transaction);
+      expect(Transaction.from(Buffer.from(signed.transaction, 'base64')).verifySignatures()).toBe(true);
+    });
+
+    it('buildPayout rejects a malformed reference before touching the RPC', async () => {
+      const server = await serve(happyHandlers());
+
+      await expect(
+        buildPayout({ to: RECIPIENT.toBase58(), amountCents: 750, reference: 'not-an-address' }),
+      ).rejects.toThrow(/reference is not a valid address/);
+      expect(server.requests).toHaveLength(0);
+    });
+
     it('buildAndSignPayout knows the final signature before anything is broadcast', async () => {
       const server = await serve(happyHandlers());
 

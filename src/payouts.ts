@@ -220,6 +220,16 @@ export interface PayInput {
    * token to the dollar.
    */
   token?: string;
+  /**
+   * A reference from createReference(), stored with the payout row BEFORE the
+   * send. It rides on the transfer as an inert read-only account key, so the
+   * landed transaction is findable with findPayoutByReference() by an id that
+   * existed before it did — the same trick charges use. That is the id to keep
+   * for a signer that signs at send time (privySigner, a wallet service), where
+   * no signature can be known before the broadcast and the bytes that land are
+   * not the bytes built here.
+   */
+  reference?: string;
 }
 
 export interface PayoutOptions {
@@ -271,6 +281,14 @@ export async function buildPayout(
   } catch (cause) {
     throw new Error(`token is not a valid mint address: ${input.token}`, { cause });
   }
+  let reference: PublicKey | undefined;
+  if (input.reference !== undefined) {
+    try {
+      reference = new PublicKey(input.reference);
+    } catch (cause) {
+      throw new Error(`reference is not a valid address: ${input.reference}`, { cause });
+    }
+  }
   const treasuryAta = getAssociatedTokenAddressSync(mint, treasury);
   // Smart-contract wallets are off-curve owners; they are still payable.
   const recipientAta = getAssociatedTokenAddressSync(mint, recipient, true);
@@ -290,20 +308,24 @@ export async function buildPayout(
     blockhash: latest.blockhash,
     lastValidBlockHeight: latest.lastValidBlockHeight,
   });
-  tx.add(
-    createAssociatedTokenAccountIdempotentInstruction(treasury, recipientAta, recipient, mint),
-    createTransferCheckedInstruction(
-      treasuryAta,
-      mint,
-      recipientAta,
-      treasury,
-      BigInt(amountCents) * BASE_UNITS_PER_CENT,
-      // Every app token shares HSUSD's scale, so one conversion serves them
-      // all. transferChecked verifies this on-chain: a token minted at another
-      // scale fails the transfer rather than moving the wrong amount.
-      HSUSD_DECIMALS,
-    ),
+  const transfer = createTransferCheckedInstruction(
+    treasuryAta,
+    mint,
+    recipientAta,
+    treasury,
+    BigInt(amountCents) * BASE_UNITS_PER_CENT,
+    // Every app token shares HSUSD's scale, so one conversion serves them
+    // all. transferChecked verifies this on-chain: a token minted at another
+    // scale fails the transfer rather than moving the wrong amount.
+    HSUSD_DECIMALS,
   );
+  // The reference rides on the transfer as an extra read-only, non-signer
+  // account: the Token program ignores it, validators index the transaction
+  // under it, and a sponsoring service that rebuilds the message keeps it.
+  if (reference !== undefined) {
+    transfer.keys.push({ pubkey: reference, isSigner: false, isWritable: false });
+  }
+  tx.add(createAssociatedTokenAccountIdempotentInstruction(treasury, recipientAta, recipient, mint), transfer);
   // Deliberately idiomatic and nothing more: ATA-create-if-needed +
   // transferChecked + the caller's memo. One consequence is standard Solana:
   // two payouts with identical payer/recipient/amount/memo on the same

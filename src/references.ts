@@ -14,6 +14,7 @@ import bs58 from 'bs58';
 import { confirmCharge, ConfirmChargeError } from './charges';
 import type { ConfirmChargeOptions, ConfirmedCharge } from './charges';
 import { mockEnabled } from './mock';
+import { PayError } from './payouts';
 import { rpcUrl } from './rpc';
 
 const REFERENCE_BYTES = 32;
@@ -59,13 +60,27 @@ export interface FindChargeOptions extends ConfirmChargeOptions {
 
 interface RpcSignature {
   signature: string;
+  slot: number;
   err: unknown;
+}
+
+type HistoryPage = Pick<FindChargeOptions, 'limit' | 'before' | 'until'>;
+
+export interface FoundPayout {
+  /** The landed transaction's signature: hand it to confirmPayout(). */
+  signature: string;
+  slot: number;
+  /**
+   * The transaction landed but failed, so no funds moved. confirmPayout()
+   * reports it as `failed_on_chain`; a fresh attempt is then safe.
+   */
+  failed: boolean;
 }
 
 async function fetchSignatures(
   endpoint: string,
   reference: string,
-  options: FindChargeOptions | undefined,
+  options: HistoryPage | undefined,
 ): Promise<RpcSignature[]> {
   const params: Record<string, unknown> = {
     commitment: 'confirmed',
@@ -104,6 +119,16 @@ async function fetchSignatures(
   return body.result ?? [];
 }
 
+// Both lookups start the same way: one page of the reference's history, oldest
+// first. A reference is unguessable until it lands, so the first transaction
+// ever to touch it is the one the app was waiting for; the RPC answers
+// newest-first, hence the reversal. They part only at what to do with each
+// entry — a charge is verified, a payout is reported.
+async function historyOldestFirst(reference: string, page?: HistoryPage): Promise<RpcSignature[]> {
+  const signatures = await fetchSignatures(rpcUrl(), reference, page);
+  return signatures.reverse();
+}
+
 /**
  * The charge carrying `reference`, or null if none has landed yet.
  *
@@ -135,12 +160,7 @@ export async function findChargeByReference(
   // recover. Answering "nothing found" keeps a sweep from reaching an RPC.
   if (mockEnabled()) return null;
 
-  const endpoint = rpcUrl();
-  const signatures = await fetchSignatures(endpoint, reference, options);
-
-  // The RPC answers newest-first, so the oldest is the tail.
-  for (let index = signatures.length - 1; index >= 0; index -= 1) {
-    const entry = signatures[index]!;
+  for (const entry of await historyOldestFirst(reference, options)) {
     if (entry.err) continue;
     try {
       return await confirmCharge(entry.signature, options);
@@ -154,4 +174,48 @@ export async function findChargeByReference(
     }
   }
   return null;
+}
+
+
+/**
+ * The payout carrying `reference`, or null while none has landed.
+ *
+ * The payout twin of findChargeByReference, for the signers that cannot know a
+ * signature before the send (privySigner, a wallet service): store the
+ * reference with the payout row before sending, and this answers "did it
+ * land?" by an id that existed before the transaction did — whatever
+ * blockhash or fee payer the service signed with.
+ *
+ * Returns the first transaction ever to carry the reference, failed ones
+ * included: a reference is unguessable until it lands, so that transaction is
+ * the attempt you sent, and a landed-but-failed attempt is exactly what makes
+ * a fresh one safe. One page of history is all a single-use key ever has.
+ * Judge the result with confirmPayout(found.signature).
+ *
+ * **null means "not yet" only for a while.** With a sponsoring signer the
+ * blockhash the service used is not yours to know, so no expiry fence exists;
+ * what bounds a retry is the service's own idempotency (Privy replays a
+ * same-key, same-body send for 24 hours instead of executing it again). Inside
+ * that window a resend of the stored bytes under the stored key is safe; past
+ * it, a null is a row to reconcile, never a licence to send blind.
+ *
+ * Throws PayError('rpc_error') if the chain couldn't be read. A failure to
+ * look is not a negative answer, and must never be treated as one.
+ */
+export async function findPayoutByReference(reference: string): Promise<FoundPayout | null> {
+  // The mock host settles nothing on-chain, so there is never anything to find.
+  if (mockEnabled()) return null;
+
+  let history: RpcSignature[];
+  try {
+    history = await historyOldestFirst(reference);
+  } catch (error) {
+    if (error instanceof ConfirmChargeError) {
+      throw new PayError('rpc_error', error.message, { cause: error.cause ?? error });
+    }
+    throw error;
+  }
+  const first = history[0];
+  if (first === undefined) return null;
+  return { signature: first.signature, slot: first.slot, failed: first.err != null };
 }

@@ -20,7 +20,9 @@ export {
 export {
   createReference,
   findChargeByReference,
+  findPayoutByReference,
   type FindChargeOptions,
+  type FoundPayout,
 } from './references';
 
 export { PUBLIC_MAINNET_RPC, rpcUrl, usingPublicRpc } from './rpc';
