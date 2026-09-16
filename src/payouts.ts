@@ -207,19 +207,22 @@ function defaultSigner(): PaymentSigner {
 // the first is proven dead.
 // ---------------------------------------------------------------------------
 
-export interface PayInput {
+export interface PayRecipient {
   /** The recipient's wallet — `session.user.wallet` from your verified session. */
   to: string;
   /** Whole US cents; must be a positive integer. */
   amountCents: number;
-  /** Optional on-chain label for the payout. */
-  memo?: string;
   /**
    * Mint to pay in. Defaults to HSUSD; name one of your own `appTokens` mints
    * to pay out that token instead. It must be HSUSD-shaped — 9 decimals, one
    * token to the dollar.
    */
   token?: string;
+}
+
+interface PayInputBase {
+  /** Optional on-chain label for the payout. */
+  memo?: string;
   /**
    * A reference from createReference(), stored with the payout row BEFORE the
    * send. It rides on the transfer as an inert read-only account key, so the
@@ -230,6 +233,31 @@ export interface PayInput {
    * not the bytes built here.
    */
   reference?: string;
+}
+
+/** One recipient: the shorthand for the common payout. */
+export interface SinglePayInput extends PayInputBase, PayRecipient {}
+
+/**
+ * One or more recipients paid in the same transaction — a winner and the
+ * creator's cut, say. Each is its own ATA-create + transferChecked, in its own
+ * mint; a wallet policy checks every transfer; all of them land or none does.
+ */
+export interface MultiPayInput extends PayInputBase {
+  recipients: PayRecipient[];
+}
+
+export type PayInput = SinglePayInput | MultiPayInput;
+
+function recipientsOf(input: PayInput): PayRecipient[] {
+  if ('recipients' in input) {
+    if (!Array.isArray(input.recipients) || input.recipients.length === 0) {
+      throw new Error('recipients must name at least one recipient');
+    }
+    return input.recipients;
+  }
+  const { to, amountCents, token } = input;
+  return [token === undefined ? { to, amountCents } : { to, amountCents, token }];
 }
 
 export interface PayoutOptions {
@@ -257,16 +285,24 @@ export async function buildPayout(
   input: PayInput,
   options?: PayoutOptions,
 ): Promise<BuiltPayout> {
-  const { to, amountCents } = input;
-  if (!Number.isInteger(amountCents) || amountCents <= 0) {
-    throw new Error('amountCents must be a positive integer');
-  }
-  let recipient: PublicKey;
-  try {
-    recipient = new PublicKey(to);
-  } catch (cause) {
-    throw new Error(`recipient wallet is not a valid address: ${to}`, { cause });
-  }
+  const recipients = recipientsOf(input).map(({ to, amountCents, token }) => {
+    if (!Number.isInteger(amountCents) || amountCents <= 0) {
+      throw new Error('amountCents must be a positive integer');
+    }
+    let recipient: PublicKey;
+    try {
+      recipient = new PublicKey(to);
+    } catch (cause) {
+      throw new Error(`recipient wallet is not a valid address: ${to}`, { cause });
+    }
+    let mint: PublicKey;
+    try {
+      mint = new PublicKey(token ?? HSUSD_MINT);
+    } catch (cause) {
+      throw new Error(`token is not a valid mint address: ${token}`, { cause });
+    }
+    return { recipient, mint, amount: BigInt(amountCents) * BASE_UNITS_PER_CENT };
+  });
   const signer = options?.signer ?? defaultSigner();
   const treasury = new PublicKey(signer.address);
   if (!PublicKey.isOnCurve(treasury.toBytes())) {
@@ -274,12 +310,6 @@ export async function buildPayout(
       `treasury ${signer.address} is a PDA/smart-contract wallet — ` +
         'payouts require a keypair-backed treasury that can sign directly',
     );
-  }
-  let mint: PublicKey;
-  try {
-    mint = new PublicKey(input.token ?? HSUSD_MINT);
-  } catch (cause) {
-    throw new Error(`token is not a valid mint address: ${input.token}`, { cause });
   }
   let reference: PublicKey | undefined;
   if (input.reference !== undefined) {
@@ -289,14 +319,22 @@ export async function buildPayout(
       throw new Error(`reference is not a valid address: ${input.reference}`, { cause });
     }
   }
-  const treasuryAta = getAssociatedTokenAddressSync(mint, treasury);
-  // Smart-contract wallets are off-curve owners; they are still payable.
-  const recipientAta = getAssociatedTokenAddressSync(mint, recipient, true);
+  const transfers = recipients.map(({ recipient, mint, amount }) => ({
+    recipient,
+    mint,
+    amount,
+    treasuryAta: getAssociatedTokenAddressSync(mint, treasury),
+    // Smart-contract wallets are off-curve owners; they are still payable.
+    recipientAta: getAssociatedTokenAddressSync(mint, recipient, true),
+  }));
   // A reference naming an account the payout already carries is not a
   // reference: the message compiler folds it into that account's entry, and a
   // lookup by it would answer with that account's whole history.
   if (reference !== undefined) {
-    const carried = [treasury, treasuryAta, mint, recipient, recipientAta];
+    const carried = [
+      treasury,
+      ...transfers.flatMap((t) => [t.treasuryAta, t.mint, t.recipient, t.recipientAta]),
+    ];
     if (carried.some((key) => key.equals(reference!))) {
       throw new Error('reference must not be an account the payout already carries');
     }
@@ -317,26 +355,29 @@ export async function buildPayout(
     blockhash: latest.blockhash,
     lastValidBlockHeight: latest.lastValidBlockHeight,
   });
-  const transfer = createTransferCheckedInstruction(
-    treasuryAta,
-    mint,
-    recipientAta,
-    treasury,
-    BigInt(amountCents) * BASE_UNITS_PER_CENT,
-    // Every app token shares HSUSD's scale, so one conversion serves them
-    // all. transferChecked verifies this on-chain: a token minted at another
-    // scale fails the transfer rather than moving the wrong amount.
-    HSUSD_DECIMALS,
-  );
-  // The reference rides on the transfer as an extra read-only, non-signer
-  // account: the Token program ignores it, validators index the transaction
-  // under it, and a sponsoring service that rebuilds the message keeps it.
-  if (reference !== undefined) {
-    transfer.keys.push({ pubkey: reference, isSigner: false, isWritable: false });
-  }
-  tx.add(createAssociatedTokenAccountIdempotentInstruction(treasury, recipientAta, recipient, mint), transfer);
+  transfers.forEach(({ recipient, mint, amount, treasuryAta, recipientAta }, index) => {
+    const transfer = createTransferCheckedInstruction(
+      treasuryAta,
+      mint,
+      recipientAta,
+      treasury,
+      amount,
+      // Every app token shares HSUSD's scale, so one conversion serves them
+      // all. transferChecked verifies this on-chain: a token minted at another
+      // scale fails the transfer rather than moving the wrong amount.
+      HSUSD_DECIMALS,
+    );
+    // The reference rides on the first transfer as an extra read-only,
+    // non-signer account: the Token program ignores it, validators index the
+    // transaction under it, and a sponsoring service that rebuilds the
+    // message keeps it.
+    if (index === 0 && reference !== undefined) {
+      transfer.keys.push({ pubkey: reference, isSigner: false, isWritable: false });
+    }
+    tx.add(createAssociatedTokenAccountIdempotentInstruction(treasury, recipientAta, recipient, mint), transfer);
+  });
   // Deliberately idiomatic and nothing more: ATA-create-if-needed +
-  // transferChecked + the caller's memo. One consequence is standard Solana:
+  // transferChecked per recipient + the caller's memo. One consequence is standard Solana:
   // two payouts with identical payer/recipient/amount/memo on the same
   // blockhash serialize to byte-identical transactions — one deterministic
   // signature, ONE transfer — so payouts that can fire in the same instant

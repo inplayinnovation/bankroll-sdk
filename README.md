@@ -55,6 +55,15 @@ const found = await findPayoutByReference(reference) // { signature, slot, faile
 ```
 
 ```ts
+// Several recipients in ONE transaction — a winner and the creator's cut —
+// each its own transfer, all landing or none:
+await pay({
+  recipients: [{ to: winner, amountCents: 160 }, { to: creator, amountCents: 40 }],
+  memo: `game:${gameId}`,
+}, { signer })
+```
+
+```ts
 // A Bankroll server wallet (in-app builder apps, or provisioned by Bankroll)?
 // Explicit: pass the signer where you pay. It defaults its inputs from the
 // four env lines provisioning printed — BANKROLL_PAYEE, BANKROLL_DELEGATED_KEY,

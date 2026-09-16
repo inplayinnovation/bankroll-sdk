@@ -204,6 +204,74 @@ describe('pay', () => {
       expect(memoIx!.data.toString('utf8')).toBe('order:42');
     });
 
+    it('pays several recipients in one transaction: a create and a transfer each, the reference on the first', async () => {
+      const server = await serve(happyHandlers());
+      const OWNER = Keypair.generate().publicKey;
+      const reference = Keypair.generate().publicKey;
+      const built = await buildPayout({
+        recipients: [
+          { to: RECIPIENT.toBase58(), amountCents: 160 },
+          { to: OWNER.toBase58(), amountCents: 40 },
+        ],
+        memo: 'game:7',
+        reference: reference.toBase58(),
+      });
+      const tx = Transaction.from(Buffer.from(built.transaction, 'base64'));
+      const treasuryAta = getAssociatedTokenAddressSync(MINT, TREASURY.publicKey);
+
+      expect(tx.instructions).toHaveLength(5);
+      const [create1, transfer1, create2, transfer2, memoIx] = tx.instructions;
+      const expectedTransfer = (to: PublicKey, cents: bigint) =>
+        createTransferCheckedInstruction(
+          treasuryAta,
+          MINT,
+          getAssociatedTokenAddressSync(MINT, to, true),
+          TREASURY.publicKey,
+          cents * BASE_UNITS_PER_CENT,
+          HSUSD_DECIMALS,
+        );
+      expect(Buffer.compare(transfer1!.data, expectedTransfer(RECIPIENT, 160n).data)).toBe(0);
+      expect(Buffer.compare(transfer2!.data, expectedTransfer(OWNER, 40n).data)).toBe(0);
+      expect(create1!.keys[2]!.pubkey.equals(RECIPIENT)).toBe(true);
+      expect(create2!.keys[2]!.pubkey.equals(OWNER)).toBe(true);
+      // The reference is the extra key on the first transfer only.
+      expect(transfer1!.keys).toHaveLength(expectedTransfer(RECIPIENT, 160n).keys.length + 1);
+      expect(transfer1!.keys.at(-1)!.pubkey.equals(reference)).toBe(true);
+      expect(transfer2!.keys).toHaveLength(expectedTransfer(OWNER, 40n).keys.length);
+      expect(memoIx!.data.toString('utf8')).toBe('game:7');
+      expect(server.requests.filter((r) => r.method === 'sendTransaction')).toHaveLength(0);
+    });
+
+    it('pays each recipient in its own mint', async () => {
+      await serve(happyHandlers());
+      const OWNER = Keypair.generate().publicKey;
+      const appToken = Keypair.generate().publicKey;
+      const built = await buildPayout({
+        recipients: [
+          { to: RECIPIENT.toBase58(), amountCents: 160, token: appToken.toBase58() },
+          { to: OWNER.toBase58(), amountCents: 40 },
+        ],
+      });
+      const tx = Transaction.from(Buffer.from(built.transaction, 'base64'));
+      const [, transfer1, , transfer2] = tx.instructions;
+      // transferChecked keys: source, mint, destination, owner.
+      expect(transfer1!.keys[1]!.pubkey.equals(appToken)).toBe(true);
+      expect(transfer1!.keys[0]!.pubkey.equals(getAssociatedTokenAddressSync(appToken, TREASURY.publicKey))).toBe(true);
+      expect(transfer2!.keys[1]!.pubkey.equals(MINT)).toBe(true);
+    });
+
+    it('rejects an empty recipients list, and a bad recipient, before any RPC call', async () => {
+      const server = await serve(happyHandlers());
+      await expect(buildPayout({ recipients: [] })).rejects.toThrow(/at least one recipient/);
+      await expect(
+        buildPayout({ recipients: [{ to: RECIPIENT.toBase58(), amountCents: 1 }, { to: 'nope', amountCents: 1 }] }),
+      ).rejects.toThrow(/recipient wallet is not a valid address: nope/);
+      await expect(
+        buildPayout({ recipients: [{ to: RECIPIENT.toBase58(), amountCents: 1.5 }] }),
+      ).rejects.toThrow(/amountCents must be a positive integer/);
+      expect(server.requests).toHaveLength(0);
+    });
+
     it('omits the memo instruction when no memo is given', async () => {
       const tx = await builtTransaction();
       expect(tx.instructions).toHaveLength(2);

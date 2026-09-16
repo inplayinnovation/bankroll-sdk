@@ -59,8 +59,11 @@ export {
   type BuiltSignedPayout,
   type ConfirmPayoutOptions,
   type PayErrorCode,
+  type MultiPayInput,
   type PayInput,
+  type PayRecipient,
   type PaymentSigner,
+  type SinglePayInput,
   type PayoutOptions,
   type SignedPayout,
 } from './payouts';
