@@ -13,6 +13,9 @@
 // The server half is honoured ONLY when BANKROLL_MOCK=1 and NODE_ENV is not
 // production. A production build never reads the flag, so a token or
 // signature from this file is worthless against a deployment.
+import { randomUUID } from 'node:crypto';
+
+import type { PaymentSigner } from './payouts';
 import type { BankrollSession } from './server';
 
 export const MOCK_FLAG = 'BANKROLL_MOCK';
@@ -146,9 +149,36 @@ export function isMockSignature(signature: string): boolean {
   return signature.startsWith(MOCK_SIGNATURE_PREFIX);
 }
 
+// A payout the mock "sent": the same family as the charge signatures above,
+// with its own marker so the two can never be mistaken for each other. It
+// carries no facts — a payout has nothing a route needs to read back, only
+// an outcome — so `parseMockSignature` says null for it, deliberately.
+const MOCK_PAYOUT_PREFIX = `${MOCK_SIGNATURE_PREFIX}payout-`;
+
+export function isMockPayoutSignature(signature: string): boolean {
+  return signature.startsWith(MOCK_PAYOUT_PREFIX);
+}
+
+/**
+ * A PaymentSigner for the mock: it signs nothing and broadcasts nothing, and
+ * answers each send with a mock payout signature that `confirmPayout`
+ * accepts outright while the mock is enabled — the payout twin of the
+ * host's `pay()`. What a coding agent's dev server and `npm run check` pay
+ * out with, so the whole payout path runs end to end without a key and
+ * without money. Worthless in production, where the mock is never read.
+ */
+export function mockPayoutSigner(address: string): PaymentSigner {
+  return {
+    address,
+    async sendTransaction(): Promise<string> {
+      return `${MOCK_PAYOUT_PREFIX}${randomUUID()}`;
+    },
+  };
+}
+
 /** The facts a mock signature carries, or null if it is not a well-formed one. */
 export function parseMockSignature(signature: string): MockCharge | null {
-  if (!isMockSignature(signature)) return null;
+  if (!isMockSignature(signature) || isMockPayoutSignature(signature)) return null;
   const facts = decodeJson(signature.slice(MOCK_SIGNATURE_PREFIX.length));
   if (!facts) return null;
   const { amountCents, payer, payee, mint, memo } = facts;

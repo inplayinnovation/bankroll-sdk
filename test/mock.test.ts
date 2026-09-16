@@ -4,15 +4,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { confirmCharge, ConfirmChargeError } from '../src/charges';
 import { BANKROLL_TOKEN_HEADER } from '../src/constants';
 import {
+  isMockPayoutSignature,
   isMockSignature,
   MOCK_WALLET,
   mockEnabled,
   mockHostScript,
+  mockPayoutSigner,
   mockSession,
   mockToken,
   parseMockSignature,
 } from '../src/mock';
 import { getSession } from '../src/next';
+import { confirmPayout } from '../src/payouts';
 import { findChargeByReference } from '../src/references';
 
 vi.mock('next/headers', () => ({
@@ -109,6 +112,36 @@ describe('getSession under the mock', () => {
     process.env.NODE_ENV = 'production';
     // jose rejects alg:none before ever fetching keys.
     expect(await getSession(request(mockToken()))).toBeNull();
+  });
+});
+
+describe('mock payouts', () => {
+  it('signs nothing and answers with a mock payout signature the mock confirms outright', async () => {
+    const signer = mockPayoutSigner('Payee111');
+    expect(signer.address).toBe('Payee111');
+    // Signs at send time, like a wallet service: nothing to store before the send.
+    expect(signer.signTransaction).toBeUndefined();
+
+    const signature = await signer.sendTransaction('AQ==');
+    expect(isMockSignature(signature)).toBe(true);
+    expect(isMockPayoutSignature(signature)).toBe(true);
+    await expect(confirmPayout(signature)).resolves.toBeUndefined();
+  });
+
+  it('is a payout, not a payment: the charge side refuses it', async () => {
+    const signature = await mockPayoutSigner('Payee111').sendTransaction('AQ==');
+    expect(parseMockSignature(signature)).toBeNull();
+    await expect(confirmCharge(signature)).rejects.toMatchObject({ code: 'not_a_payment' });
+  });
+
+  it('never confirms a mock charge signature as a payout', async () => {
+    const host = hostFrom(mockHostScript({ payee: PAYEE }));
+    const charge = (await host.pay!({ amountCents: 100 })) as string;
+    expect(isMockPayoutSignature(charge)).toBe(false);
+    // Off the mock path, confirmPayout goes to the chain — stubbed here to
+    // fail fast — and a made-up signature is simply unknown to it.
+    vi.stubGlobal('fetch', () => Promise.reject(new Error('no chain in this test')));
+    await expect(confirmPayout(charge)).rejects.toBeInstanceOf(Error);
   });
 });
 

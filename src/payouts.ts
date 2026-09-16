@@ -26,6 +26,7 @@ import {
 import bs58 from 'bs58';
 
 import { BASE_UNITS_PER_CENT, HSUSD_DECIMALS, HSUSD_MINT } from './charges';
+import { isMockPayoutSignature, mockEnabled } from './mock';
 import { rpcUrl } from './rpc';
 import {
   createAssociatedTokenAccountIdempotentInstruction,
@@ -579,6 +580,10 @@ export async function confirmPayout(
   signature: string,
   options?: ConfirmPayoutOptions,
 ): Promise<void> {
+  // A mock signer's payout settled the moment it was "sent": nothing is on
+  // chain to wait for. Only with BANKROLL_MOCK=1 outside production, and only
+  // for a payout the mock signer made — a mock charge signature is not one.
+  if (mockEnabled() && isMockPayoutSignature(signature)) return;
   const lastValidBlockHeight = options?.lastValidBlockHeight;
   const status = await awaitConfirmation(getConnection(), signature, lastValidBlockHeight);
   switch (status) {
