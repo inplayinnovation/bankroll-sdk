@@ -108,7 +108,7 @@ optional entry brings its own peer so you install only what you use.
 |---|---|
 | `@joinbankroll/sdk` | Browser client. No runtime imports — none of the server half's dependencies reach the browser bundle. SSR-safe. |
 | `@joinbankroll/sdk/server` | Token verification, charge confirmation, payouts, treasury, app public key, and notifications. Node ≥ 20; depends on [jose](https://github.com/panva/jose) plus exact-pinned `@solana/web3.js` (no version ranges on the money path). Never imports the client. |
-| `@joinbankroll/sdk/matchmaking` | Server client for verified apps: `createTicket`, `listTickets`, `cancelTicket`. Recoverable entries, final head-to-head matches, atomic cancellation. |
+| `@joinbankroll/sdk/matchmaking` | Server client for verified apps: `createTicket`, `listTickets`, `cancelTicket`. Recoverable entries, final head-to-head matches, atomic cancellation. With `BANKROLL_MOCK=1` outside production it pairs in-process instead, and a lone ticket meets a stand-in opponent after a few seconds. |
 | `@joinbankroll/sdk/next` | Server helpers for Next: `getOrigin`, `getSession` / `requireSession`, `requireIdentity`, `manifestRoute`. Server-only — importing it from a client bundle throws. Peer: `next >= 15`. |
 | `@joinbankroll/sdk/manifest` | `manifestClaims(input)`: the manifest's claims as a plain object, with no framework dependency — what `manifestRoute` serves, for tooling that builds an app's manifest before the app is deployed. |
 | `@joinbankroll/sdk/store` | Durable JSON with an atomic create and compare-and-swap. `./store` is pure interface; `./store/fs` imports only Node builtins; `./store/vercel` is the only module touching `@vercel/blob` (peer, `>= 2.3.0`). |

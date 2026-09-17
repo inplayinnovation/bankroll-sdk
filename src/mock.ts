@@ -8,7 +8,9 @@
 //                     evaluateOnNewDocument.
 //   mockSession() /   the server half — accepts that host's unsigned token, and
 //   mock signatures   the made-up signatures its pay() returns, so the app's
-//                     own routes run end to end.
+//                     own routes run end to end. Matchmaking has a stand-in
+//                     too: createMatchmaking pairs in this process instead of
+//                     calling Bankroll (src/matchmaking-mock.ts).
 //
 // The server half is honoured ONLY when BANKROLL_MOCK=1 and NODE_ENV is not
 // production. A production build never reads the flag, so a token or
@@ -36,6 +38,12 @@ const TOKEN_TTL_SECONDS = 3600;
 const MS_PER_SECOND = 1000;
 
 export const MOCK_WALLET = 'MockWa11et11111111111111111111111111111111';
+/**
+ * The player the mock's matchmaking pairs a lone ticket with after a few
+ * seconds, so one tester sees a match. It never plays; the app resolves the
+ * round the way it would for any opponent who does not.
+ */
+export const MOCK_OPPONENT = 'mock-opponent';
 const DEFAULT_USERNAME = 'tester';
 const DEFAULT_AGE = 30;
 const DEFAULT_CASH_CENTS = 100_000;
