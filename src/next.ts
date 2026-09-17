@@ -9,6 +9,7 @@ import { headers } from 'next/headers';
 
 import { appAddress } from './app-auth';
 import { BANKROLL_TOKEN_HEADER } from './constants';
+import { MANIFEST_TYP, manifestClaims, type AppTokens } from './manifest';
 import { mockEnabled, mockSession } from './mock';
 import { verifyToken, type BankrollSession } from './server';
 
@@ -154,32 +155,8 @@ export interface ManifestApp {
   appTokens?: () => AppTokens;
 }
 
-export interface AppToken {
-  name?: string;
-  description?: string;
-}
+export type { AppToken, AppTokens } from './manifest';
 
-export type AppTokens = Record<string, AppToken>;
-
-/**
- * Drop entries the host would reject rather than serving a manifest it refuses
- * to parse — an empty string is invalid for either field, and one bad entry
- * takes the whole manifest down with it.
- */
-function usableTokens(tokens: AppTokens): AppTokens {
-  const usable: AppTokens = {};
-  for (const [mint, token] of Object.entries(tokens)) {
-    if (!mint) continue;
-    usable[mint] = {
-      ...(token?.name ? { name: token.name } : {}),
-      ...(token?.description ? { description: token.description } : {}),
-    };
-  }
-  return usable;
-}
-
-const MANIFEST_VERSION = 1;
-const AUDIENCE = 'bankroll-app-host';
 const CONTENT_TYPE = 'application/jwt';
 
 const base64url = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -206,43 +183,20 @@ export function manifestRoute(app: ManifestApp): (request?: Request) => Promise<
       return new Response(signed, { headers: { 'content-type': CONTENT_TYPE } });
     }
 
-    const name = app.name();
-    const payments = app.payments();
-    const appKey = (app.appKey ?? appAddress)();
-    const push = app.push?.();
-    const appTokens = usableTokens(app.appTokens?.() ?? {});
-    const supportUrl = app.supportUrl?.()?.trim();
-    const iconDigest = app.iconDigest?.()?.trim();
-
     // An unsecured JWT (alg: none, empty signature) — the origin it is served
     // from is the proof, not a signature.
-    const header = { alg: 'none', typ: 'bankroll-app-manifest+jwt' };
-    const payload = {
-      ...(appKey ? { appKey } : {}),
-      // Omitted entirely when the app issues no tokens: an absent claim means
-      // only HSUSD may settle its charges, which is not the same as an empty one.
-      ...(Object.keys(appTokens).length > 0 ? { appTokens } : {}),
-      aud: AUDIENCE,
-      capabilities: {
-        session: true,
-        ...(payments ? { payments } : {}),
-        // Declared unsigned too: the claim is what Bankroll signs, so it must
-        // appear in the manifest that gets submitted for signing.
-        ...(push ? { push } : {}),
-      },
-      // Omitted rather than sent empty, like supportUrl below — and omitted
-      // when no icon is served, so the claim never promises bytes that 404.
-      ...(iconDigest ? { iconDigest } : {}),
+    const header = { alg: 'none', typ: MANIFEST_TYP };
+    const payload = manifestClaims({
+      origin: await getOrigin(),
+      name: app.name(),
       launch: app.launch,
-      manifestVersion: MANIFEST_VERSION,
-      name,
-      sub: await getOrigin(),
-      // Omitted rather than sent empty. The host ignores a claim it cannot read
-      // as a URL, so an empty one would cost nothing — but every claim is part
-      // of what a grant is bound to, and an empty string is still a difference
-      // that would re-ask the user for consent once it gained a value.
-      ...(supportUrl ? { supportUrl } : {}),
-    };
+      payments: app.payments(),
+      appKey: (app.appKey ?? appAddress)(),
+      push: app.push?.(),
+      supportUrl: app.supportUrl?.(),
+      iconDigest: app.iconDigest?.(),
+      appTokens: app.appTokens?.(),
+    });
 
     return new Response(`${base64url(header)}.${base64url(payload)}.`, {
       headers: { 'content-type': CONTENT_TYPE },

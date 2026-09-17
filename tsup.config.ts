@@ -5,6 +5,7 @@ export default defineConfig({
     'src/index.ts',
     'src/server.ts',
     'src/matchmaking.ts',
+    'src/manifest.ts',
     'src/privy.ts',
     'src/next.ts',
     'src/react.tsx',
