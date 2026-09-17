@@ -1,6 +1,6 @@
 {
   "name": "@joinbankroll/sdk",
-  "version": "0.25.0",
+  "version": "0.25.1",
   "description": "Build on Bankroll \u2014 typed client for the window.bankroll bridge, plus server-side session verification, charge confirmation, and payouts",
   "license": "MIT",
   "repository": {
@@ -85,7 +85,7 @@
     "jose": "^6.0.0"
   },
   "peerDependencies": {
-    "@privy-io/node": "^0.10.1",
+    "@privy-io/node": ">=0.10.1",
     "@vercel/blob": "^2.3.0",
     "next": ">=15",
     "react": ">=18"
