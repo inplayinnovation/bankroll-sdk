@@ -5,6 +5,8 @@
 // need it installed.
 import { PrivyClient } from '@privy-io/node';
 
+const PRIVY_REPLAY_WINDOW_MS = 24 * 60 * 60_000;
+
 import type { PaymentSigner } from './payouts';
 
 const SOLANA_MAINNET_CAIP2 = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
@@ -52,6 +54,8 @@ export async function privySigner(options?: PrivySignerOptions): Promise<Payment
   );
   const sponsor = options?.sponsor ?? true;
   const idempotencyKey = options?.idempotencyKey;
+  // Privy replays a same-key, same-body send for 24 hours instead of executing it again.
+  const replayWindowMs = idempotencyKey !== undefined ? PRIVY_REPLAY_WINDOW_MS : undefined;
 
   const privy = new PrivyClient({ appId, appSecret });
 
@@ -70,6 +74,7 @@ export async function privySigner(options?: PrivySignerOptions): Promise<Payment
 
   return {
     address,
+    ...(replayWindowMs === undefined ? {} : { replayWindowMs }),
     async sendTransaction(txBase64: string): Promise<string> {
       const { hash } = await privy
         .wallets()

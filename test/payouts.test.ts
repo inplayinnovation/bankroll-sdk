@@ -268,8 +268,19 @@ describe('pay', () => {
       ).rejects.toThrow(/recipient wallet is not a valid address: nope/);
       await expect(
         buildPayout({ recipients: [{ to: RECIPIENT.toBase58(), amountCents: 1.5 }] }),
-      ).rejects.toThrow(/amountCents must be a positive integer/);
+      ).rejects.toThrow(/amountCents must be a whole number of cents/);
       expect(server.requests).toHaveLength(0);
+    });
+
+    it('builds a zero line like any other, so a recipient owed nothing still sees the transaction', async () => {
+      await serve(happyHandlers());
+      const built = await buildPayout({
+        recipients: [
+          { to: RECIPIENT.toBase58(), amountCents: 0 },
+          { to: Keypair.generate().publicKey.toBase58(), amountCents: 180 },
+        ],
+      });
+      expect(built.transaction).toEqual(expect.any(String));
     });
 
     it('omits the memo instruction when no memo is given', async () => {
@@ -446,13 +457,13 @@ describe('pay', () => {
   });
 
   describe('validation and configuration', () => {
-    it('rejects a non-integer or non-positive amount', async () => {
+    it('rejects a non-integer or negative amount', async () => {
       await serve(happyHandlers());
-      await expect(pay({ to: RECIPIENT.toBase58(), amountCents: 0 })).rejects.toThrow(
-        'positive integer',
+      await expect(pay({ to: RECIPIENT.toBase58(), amountCents: -1 })).rejects.toThrow(
+        'zero or more',
       );
       await expect(pay({ to: RECIPIENT.toBase58(), amountCents: 12.5 })).rejects.toThrow(
-        'positive integer',
+        'whole number of cents',
       );
     });
 

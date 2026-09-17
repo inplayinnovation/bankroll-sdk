@@ -105,6 +105,13 @@ export interface PaymentSigner {
    * a fresh blockhash at send time).
    */
   signTransaction?(txBase64: string): SignedPayout;
+  /**
+   * For a signer that signs at send time: how long its service replays a send
+   * made under the same idempotency key instead of paying again. Only inside
+   * that window may bookkeeping resend the same bytes after a lost reply.
+   * Absent means the service promises nothing, and nothing is resent blind.
+   */
+  replayWindowMs?: number;
 }
 
 // Signers created by keypairSigner() sign the exact bytes pay() built, so the
@@ -211,7 +218,7 @@ function defaultSigner(): PaymentSigner {
 export interface PayRecipient {
   /** The recipient's wallet — `session.user.wallet` from your verified session. */
   to: string;
-  /** Whole US cents; must be a positive integer. */
+  /** Whole US cents, zero or more. A zero line still rides in the transaction, so the recipient sees it. */
   amountCents: number;
   /**
    * Mint to pay in. Defaults to HSUSD; name one of your own `appTokens` mints
@@ -287,8 +294,8 @@ export async function buildPayout(
   options?: PayoutOptions,
 ): Promise<BuiltPayout> {
   const recipients = recipientsOf(input).map(({ to, amountCents, token }) => {
-    if (!Number.isInteger(amountCents) || amountCents <= 0) {
-      throw new Error('amountCents must be a positive integer');
+    if (!Number.isInteger(amountCents) || amountCents < 0) {
+      throw new Error('amountCents must be a whole number of cents, zero or more');
     }
     let recipient: PublicKey;
     try {

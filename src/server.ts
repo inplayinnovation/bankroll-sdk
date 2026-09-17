@@ -47,6 +47,27 @@ export {
 } from './push';
 
 export {
+  pendingPayout,
+  settlePayout,
+  type Payout,
+  type PayoutAttempt,
+  type PayoutDocument,
+  type SettlePayoutOptions,
+} from './durable-payouts';
+
+export {
+  ReceiptError,
+  claimCharge,
+  receiptPath,
+  type ChargeField,
+  type ClaimChargeInput,
+  type ClaimedCharge,
+  type ExpectedCharge,
+  type Receipt,
+  type ReceiptErrorCode,
+} from './receipts';
+
+export {
   PayError,
   buildAndSignPayout,
   buildPayout,

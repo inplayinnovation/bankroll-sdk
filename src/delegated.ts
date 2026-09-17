@@ -10,6 +10,8 @@
 // finds the landed payout with findPayoutByReference.
 import { createPrivateKey, sign, type KeyObject } from 'node:crypto';
 
+const PRIVY_REPLAY_WINDOW_MS = 24 * 60 * 60_000;
+
 import { PayError, type PaymentSigner } from './payouts';
 
 const SOLANA_MAINNET_CAIP2 = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
@@ -116,10 +118,13 @@ export function delegatedPrivySigner(options?: DelegatedPrivySignerOptions): Pay
   );
   const apiUrl = (options?.apiUrl ?? process.env.BANKROLL_API_URL ?? DEFAULT_API_URL).replace(/\/+$/, '');
   const idempotencyKey = options?.idempotencyKey;
+  // Privy replays a same-key, same-body send for 24 hours instead of executing it again.
+  const replayWindowMs = idempotencyKey !== undefined ? PRIVY_REPLAY_WINDOW_MS : undefined;
   const requestExpiryMs = options?.requestExpiryMs ?? DEFAULT_REQUEST_EXPIRY_MS;
 
   return {
     address,
+    ...(replayWindowMs === undefined ? {} : { replayWindowMs }),
     async sendTransaction(txBase64: string): Promise<string> {
       // The exact request Privy will verify: this body, these headers, at
       // Privy's own URL. The relay rebuilds it from what it receives.
