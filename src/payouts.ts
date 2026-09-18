@@ -26,7 +26,15 @@ import {
 import bs58 from 'bs58';
 
 import { BASE_UNITS_PER_CENT, HSUSD_DECIMALS, HSUSD_MINT } from './charges';
-import { isMockPayoutSignature, isMockPayoutSigner, mockBuiltPayout, mockEnabled } from './mock';
+import {
+  deliverMockReferenceEvent,
+  isMockPayoutSignature,
+  isMockPayoutSigner,
+  mockBuiltPayout,
+  mockConfirmedEvent,
+  mockEnabled,
+  mockPayoutReference,
+} from './mock';
 import { rpcUrl } from './rpc';
 import {
   createAssociatedTokenAccountIdempotentInstruction,
@@ -494,6 +502,12 @@ export async function sendPayout(
 ): Promise<{ signature: string }> {
   const signer = options?.signer ?? defaultSigner();
   const signature = await signer.sendTransaction(transaction);
+  // Under the mock a payout carrying a managed reference is "seen" at once:
+  // the event Bankroll would send reaches the app's webhook route from here.
+  if (mockEnabled() && isMockPayoutSigner(signer)) {
+    const reference = mockPayoutReference(transaction);
+    if (reference !== null) await deliverMockReferenceEvent(mockConfirmedEvent(reference, signature));
+  }
   return { signature };
 }
 

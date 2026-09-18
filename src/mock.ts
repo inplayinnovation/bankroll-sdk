@@ -1,3 +1,4 @@
+import type { Json } from './matchmaking';
 // A stand-in for the Bankroll host, for tests and for coding agents working in
 // a plain browser. Two halves that must agree:
 //
@@ -228,6 +229,92 @@ export function parseMockSignature(signature: string): MockCharge | null {
 }
 
 // ---------------------------------------------------------------------------
+// Managed references under the mock
+// ---------------------------------------------------------------------------
+//
+// createManagedReference() mints the reference here instead of at Bankroll:
+// a marker carrying the meta and the window, so a delivery needs no memory of
+// it. The events Bankroll would send arrive at the app's own webhook route,
+// unsigned: from the mock host's pay() for a charge, from sendPayout() for a
+// mock payout, and from a timer for the window's end.
+
+export const MOCK_REFERENCE_PREFIX = `${MOCK_SIGNATURE_PREFIX}ref-`;
+export const MOCK_WEBHOOK_PATH = '/api/bankroll/webhook';
+const MOCK_EVENT_CONFIRMED = 'reference.confirmed';
+const MOCK_EVENT_EXPIRED = 'reference.expired';
+// Where the dev server answers: `next dev` records its port here.
+const PORT_ENV = 'PORT';
+const DEFAULT_PORT = '3000';
+
+export interface MockReference {
+  meta: Json;
+  expiresAt: string;
+}
+
+export function mockReference(meta: Json, expiresAt: string): string {
+  return MOCK_REFERENCE_PREFIX + base64url({ meta, expiresAt });
+}
+
+export function isMockReference(reference: string): boolean {
+  return reference.startsWith(MOCK_REFERENCE_PREFIX);
+}
+
+/** The meta and window a mock reference carries, or null if it is not one. */
+export function parseMockReference(reference: string): MockReference | null {
+  if (!isMockReference(reference)) return null;
+  const marker = decodeJson(reference.slice(MOCK_REFERENCE_PREFIX.length));
+  if (!marker || typeof marker.expiresAt !== 'string' || !('meta' in marker)) return null;
+  return { meta: marker.meta as Json, expiresAt: marker.expiresAt };
+}
+
+/** The mock reference a mock payout carries, or null. */
+export function mockPayoutReference(transaction: string): string | null {
+  let marker: Record<string, unknown> | null;
+  try {
+    marker = JSON.parse(Buffer.from(transaction, 'base64').toString('utf8'));
+  } catch {
+    return null;
+  }
+  const input = marker && typeof marker === 'object' ? (marker.input as Record<string, unknown> | undefined) : undefined;
+  const reference = input && typeof input === 'object' ? input.reference : undefined;
+  return typeof reference === 'string' && isMockReference(reference) ? reference : null;
+}
+
+/** Deliver an event to the dev server's own webhook route, the way Bankroll would. */
+export async function deliverMockReferenceEvent(event: Record<string, unknown>): Promise<void> {
+  const response = await fetch(`http://localhost:${process.env[PORT_ENV] ?? DEFAULT_PORT}${MOCK_WEBHOOK_PATH}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(event),
+  });
+  if (!response.ok) throw new Error(`The mock delivery to ${MOCK_WEBHOOK_PATH} answered ${response.status}`);
+}
+
+export function mockConfirmedEvent(reference: string, signature: string): Record<string, unknown> {
+  return { type: MOCK_EVENT_CONFIRMED, reference, signature, slot: Date.now() };
+}
+
+// References the route has already been told about, so the window's end
+// stays silent for them, as it does at Bankroll.
+const confirmedMockReferences = new Set<string>();
+
+export function noteMockConfirmed(reference: string): void {
+  confirmedMockReferences.add(reference);
+}
+
+/** Deliver `reference.expired` when the window ends, unless a transaction was seen first. */
+export function armMockExpiry(reference: string, expiresAt: string): void {
+  const timer = setTimeout(() => {
+    if (confirmedMockReferences.has(reference)) return;
+    // A timer has nobody to throw to; the dev console is where this belongs.
+    deliverMockReferenceEvent({ type: MOCK_EVENT_EXPIRED, reference, expiredAt: expiresAt }).catch((error) => {
+      console.error('[bankroll mock] reference.expired was not delivered:', error);
+    });
+  }, Math.max(0, Date.parse(expiresAt) - Date.now()));
+  timer.unref?.();
+}
+
+// ---------------------------------------------------------------------------
 // The browser half
 // ---------------------------------------------------------------------------
 
@@ -254,6 +341,9 @@ export function mockHostScript(options: MockHostOptions): string {
     cashCents,
     version: MOCK_HOST_VERSION,
     prefix: MOCK_SIGNATURE_PREFIX,
+    referencePrefix: MOCK_REFERENCE_PREFIX,
+    webhookPath: MOCK_WEBHOOK_PATH,
+    confirmedEvent: MOCK_EVENT_CONFIRMED,
   });
   return `(() => {
   const config = ${config};
@@ -266,15 +356,29 @@ export function mockHostScript(options: MockHostOptions): string {
     version: config.version,
     session: async () => config.token,
     identity: async () => config.token,
-    pay: async (input) =>
-      config.prefix +
-      base64url({
-        amountCents: input && typeof input.amountCents === 'number' ? input.amountCents : 0,
-        payer: config.wallet,
-        payee: config.payee,
-        mint: input && typeof input.token === 'string' ? input.token : null,
-        memo: input && typeof input.memo === 'string' ? input.memo : null,
-      }),
+    pay: async (input) => {
+      const signature =
+        config.prefix +
+        base64url({
+          amountCents: input && typeof input.amountCents === 'number' ? input.amountCents : 0,
+          payer: config.wallet,
+          payee: config.payee,
+          mint: input && typeof input.token === 'string' ? input.token : null,
+          memo: input && typeof input.memo === 'string' ? input.memo : null,
+        });
+      // A charge carrying a managed reference: the event Bankroll would send
+      // goes to the app's own webhook route from here, before the page hears
+      // the signature, so a route that expects the webhook first is served.
+      const reference = input && typeof input.reference === 'string' ? input.reference : null;
+      if (reference && reference.startsWith(config.referencePrefix)) {
+        await fetch(config.webhookPath, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ type: config.confirmedEvent, reference, signature, slot: Date.now() }),
+        });
+      }
+      return signature;
+    },
     balances: async () => ({ cashCents: config.cashCents, creditsCents: 0, tokens: {} }),
     deposit: async () => undefined,
     haptics: async () => undefined,

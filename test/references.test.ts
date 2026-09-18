@@ -2,11 +2,15 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { generateKeyPairSync } from 'node:crypto';
+import bs58 from 'bs58';
+import { jwtVerify } from 'jose';
+import { parseMockReference } from '../src/mock';
 
 import { BASE_UNITS_PER_CENT, ConfirmChargeError, HSUSD_MINT } from '../src/charges';
 import { PayError } from '../src/payouts';
-import { createReference, findChargeByReference, findPayoutByReference } from '../src/references';
+import { createManagedReference, createReference, findChargeByReference, findPayoutByReference, ManagedReferenceError } from '../src/references';
 
 const REFERENCE = 'GgRva3ZaFuqDDVxr8CDsFcSf7ETNqQFJRhc4Y5nqsFhk';
 const PAYER = 'PayerWa11etAddress1111111111111111111111111';
@@ -278,5 +282,98 @@ describe('findPayoutByReference', () => {
 
     await expect(findPayoutByReference(REFERENCE)).resolves.toBeNull();
     expect(server.requests).toHaveLength(0);
+  });
+});
+describe('createManagedReference', () => {
+  const keys = generateKeyPairSync('ed25519');
+  const jwk = keys.privateKey.export({ format: 'jwk' });
+  const appSecret = bs58.encode(Buffer.concat([Buffer.from(jwk.d!, 'base64url'), Buffer.from(jwk.x!, 'base64url')]));
+  const ORIGIN = 'https://game.example';
+  const META = { entryId: 'entry-1', side: 'payin' };
+  const fetchMock = vi.fn<typeof fetch>();
+
+  beforeEach(() => {
+    vi.stubEnv('BANKROLL_APP_KEY', appSecret);
+    vi.stubEnv('BANKROLL_PUSH_KEY', undefined);
+    vi.stubEnv('BANKROLL_API_URL', undefined);
+    vi.stubEnv('BANKROLL_MOCK', undefined);
+    vi.stubGlobal('fetch', fetchMock);
+    fetchMock.mockReset().mockImplementation(async () => Response.json({ reference: REFERENCE, expiresAt: '2026-09-18T18:07:00.000Z' }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('asks Bankroll under the app credential and hands back the reference', async () => {
+    const created = await createManagedReference({ meta: META, expiresInSeconds: 600 }, { origin: ORIGIN });
+
+    expect(created).toEqual({ reference: REFERENCE, expiresAt: '2026-09-18T18:07:00.000Z' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toBe('https://api.joinbankroll.com/api/v1/references');
+    expect(init).toMatchObject({ method: 'POST', cache: 'no-store', redirect: 'error' });
+    expect(JSON.parse(init!.body as string)).toEqual({ meta: META, expiresInSeconds: 600 });
+    const token = new Headers(init!.headers).get('authorization')!.slice('Bearer '.length);
+    const { payload, protectedHeader } = await jwtVerify(token, keys.publicKey, { issuer: ORIGIN, audience: 'bankroll-api' });
+    expect(protectedHeader.typ).toBe('bankroll-app-auth+jwt');
+    expect(payload.exp! - payload.iat!).toBe(60);
+  });
+
+  it('leaves the window to Bankroll when none is named, and honours BANKROLL_API_URL', async () => {
+    vi.stubEnv('BANKROLL_API_URL', 'http://localhost:3000');
+    await createManagedReference({ meta: META }, { origin: ORIGIN });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toBe('http://localhost:3000/api/v1/references');
+    expect(JSON.parse(init!.body as string)).toEqual({ meta: META });
+  });
+
+  it.each([
+    ['a meta that is not an object', { meta: [1, 2] as never }],
+    ['a meta with a non-finite number', { meta: { n: Number.POSITIVE_INFINITY } }],
+    ['a fractional window', { meta: META, expiresInSeconds: 1.5 }],
+  ])('refuses %s before calling Bankroll', async (_label, input) => {
+    await expect(createManagedReference(input, { origin: ORIGIN })).rejects.toMatchObject({ code: 'invalid_argument' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a bad origin and a missing credential before calling Bankroll', async () => {
+    await expect(createManagedReference({ meta: META }, { origin: 'http://localhost:3000' })).rejects.toMatchObject({ code: 'invalid_argument' });
+    vi.stubEnv('BANKROLL_APP_KEY', undefined);
+    await expect(createManagedReference({ meta: META }, { origin: ORIGIN })).rejects.toMatchObject({ code: 'unauthenticated' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [403, 'app_not_verified'],
+    [409, 'webhook_not_provisioned'],
+    [400, 'invalid_argument'],
+    [401, 'unauthenticated'],
+  ])("maps Bankroll's %s %s refusal", async (status, code) => {
+    fetchMock.mockResolvedValueOnce(Response.json({ error: code }, { status }));
+    const error = await createManagedReference({ meta: META }, { origin: ORIGIN }).catch((e) => e);
+    expect(error).toBeInstanceOf(ManagedReferenceError);
+    expect(error).toMatchObject({ code, status });
+  });
+
+  it('says unavailable when Bankroll cannot be reached and invalid_response for anything it cannot read', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('ECONNRESET'));
+    await expect(createManagedReference({ meta: META }, { origin: ORIGIN })).rejects.toMatchObject({ code: 'unavailable' });
+    fetchMock.mockResolvedValueOnce(Response.json({ error: 'teapot' }, { status: 418 }));
+    await expect(createManagedReference({ meta: META }, { origin: ORIGIN })).rejects.toMatchObject({ code: 'invalid_response' });
+    fetchMock.mockResolvedValueOnce(Response.json({ reference: 42 }));
+    await expect(createManagedReference({ meta: META }, { origin: ORIGIN })).rejects.toMatchObject({ code: 'invalid_response' });
+  });
+
+  it('under the mock mints the reference locally, carrying the meta and the window, and calls no one', async () => {
+    vi.stubEnv('BANKROLL_MOCK', '1');
+    vi.useFakeTimers({ now: new Date('2026-09-18T18:00:00.000Z') });
+    const created = await createManagedReference({ meta: META, expiresInSeconds: 60 }, { origin: ORIGIN });
+
+    expect(created.expiresAt).toBe('2026-09-18T18:01:00.000Z');
+    expect(parseMockReference(created.reference)).toEqual({ meta: META, expiresAt: '2026-09-18T18:01:00.000Z' });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

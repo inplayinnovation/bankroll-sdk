@@ -310,3 +310,70 @@ export async function confirmCharge(
     slot: parsed.slot,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Checking a charge against what was sold
+// ---------------------------------------------------------------------------
+
+export type ChargeField = 'payee' | 'payer' | 'mint' | 'amountCents' | 'memo';
+
+export interface ExpectedCharge {
+  /** The verified session's wallet. */
+  payer: string;
+  /** The app's payments address. */
+  payee: string;
+  /** The mint the entry is priced in; an app token must never buy an HSUSD prize. */
+  mint: string;
+  amountCents: number;
+  /**
+   * The memo the quote carried: a string that must match, null for "must
+   * carry none". Leave it out to not compare the memo at all.
+   */
+  memo?: string | null;
+}
+
+/** A confirmed charge that is not the payment the entry was sold for. */
+export class ChargeMismatchError extends Error {
+  /** The first field that differed. */
+  readonly field: ChargeField;
+  /** The charge as confirmed, for the record. */
+  readonly charge: ConfirmedCharge;
+
+  constructor(charge: ConfirmedCharge, field: ChargeField) {
+    super(`Charge ${charge.signature} does not match what the entry was sold for: ${field}`);
+    this.name = 'ChargeMismatchError';
+    this.field = field;
+    this.charge = charge;
+  }
+}
+
+/** The first field on which a confirmed charge differs from what was sold, or null when it matches. */
+export function chargeMismatch(charge: ConfirmedCharge, expected: ExpectedCharge): ChargeField | null {
+  return charge.payee !== expected.payee ? 'payee'
+    : charge.payer !== expected.payer ? 'payer'
+    : charge.mint !== expected.mint ? 'mint'
+    : charge.amountCents !== expected.amountCents ? 'amountCents'
+    : expected.memo !== undefined && charge.memo !== expected.memo ? 'memo'
+    : null;
+}
+
+/**
+ * confirmCharge() plus the comparison: read the charge and check it against
+ * what the entry was sold for. `payer`, `payee`, `mint` and `amountCents`
+ * must match exactly; `memo` is compared only when the terms include it,
+ * and null means the charge must carry none. Throws ChargeMismatchError
+ * naming the first field that differed. A reference is public once it
+ * lands, so a charge found by one, or reported by a webhook, is a candidate
+ * until this says otherwise. Recording the signature against a second use
+ * is yours: one charge buys one thing.
+ */
+export async function checkCharge(
+  signature: string,
+  expected: ExpectedCharge,
+  options?: ConfirmChargeOptions,
+): Promise<ConfirmedCharge> {
+  const charge = await confirmCharge(signature, options);
+  const field = chargeMismatch(charge, expected);
+  if (field) throw new ChargeMismatchError(charge, field);
+  return charge;
+}

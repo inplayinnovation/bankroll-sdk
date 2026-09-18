@@ -8,21 +8,32 @@ export { appAddress } from './app-auth';
 
 export {
   BASE_UNITS_PER_CENT,
+  ChargeMismatchError,
   ConfirmChargeError,
   HSUSD_DECIMALS,
   HSUSD_MINT,
+  chargeMismatch,
+  checkCharge,
   confirmCharge,
+  type ChargeField,
   type ConfirmChargeErrorCode,
   type ConfirmChargeOptions,
   type ConfirmedCharge,
+  type ExpectedCharge,
 } from './charges';
 
 export {
+  createManagedReference,
   createReference,
   findChargeByReference,
   findPayoutByReference,
+  ManagedReferenceError,
   type FindChargeOptions,
   type FoundPayout,
+  type ManagedReference,
+  type ManagedReferenceErrorCode,
+  type ManagedReferenceInput,
+  type ManagedReferenceOptions,
 } from './references';
 
 export { PUBLIC_MAINNET_RPC, rpcUrl, usingPublicRpc } from './rpc';
@@ -45,27 +56,6 @@ export {
   type PushErrorCode,
   type NotifyUserInput,
 } from './push';
-
-export {
-  pendingPayout,
-  settlePayout,
-  type Payout,
-  type PayoutAttempt,
-  type PayoutDocument,
-  type SettlePayoutOptions,
-} from './durable-payouts';
-
-export {
-  ReceiptError,
-  claimCharge,
-  receiptPath,
-  type ChargeField,
-  type ClaimChargeInput,
-  type ClaimedCharge,
-  type ExpectedCharge,
-  type Receipt,
-  type ReceiptErrorCode,
-} from './receipts';
 
 export {
   PayError,

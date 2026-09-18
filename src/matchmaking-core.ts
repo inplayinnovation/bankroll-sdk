@@ -38,3 +38,23 @@ export function snapshot(value: unknown, ancestors = new Set<object>()): Json {
     return array ? entries.map(([, item]) => item) : Object.fromEntries(entries);
   } finally { ancestors.delete(value); }
 }
+
+/**
+ * An HTTPS origin, or null. As an issuer (the app's own origin) it must be
+ * canonical and public; as an API endpoint a loopback HTTP origin is fine
+ * for a local Bankroll.
+ */
+export function parseEndpoint(value: string, issuer: boolean): string | null {
+  try {
+    const url = new URL(value);
+    const host = url.hostname;
+    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(host);
+    if (url.username || url.password || url.search || url.hash || url.pathname !== '/') return null;
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback && !issuer)) return null;
+    if (issuer && (url.origin !== value || !host.includes('.') || host.startsWith('[')
+      || /^\d+\.\d+\.\d+\.\d+$/.test(host) || ['.localhost', '.local', '.internal', '.home.arpa'].some((suffix) => host.endsWith(suffix)))) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}

@@ -1,6 +1,6 @@
 {
   "name": "@joinbankroll/sdk",
-  "version": "0.27.1",
+  "version": "0.28.0",
   "description": "Build on Bankroll \u2014 typed client for the window.bankroll bridge, plus server-side session verification, charge confirmation, and payouts",
   "license": "MIT",
   "repository": {
@@ -61,6 +61,11 @@
       "types": "./dist/mock.d.ts",
       "import": "./dist/mock.js",
       "default": "./dist/mock.js"
+    },
+    "./webhooks": {
+      "types": "./dist/webhooks.d.ts",
+      "import": "./dist/webhooks.js",
+      "default": "./dist/webhooks.js"
     },
     "./matchmaking": {
       "types": "./dist/matchmaking.d.ts",

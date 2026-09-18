@@ -2,7 +2,9 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ChargeMismatchError, checkCharge } from '../src/charges';
+import { MOCK_WALLET } from '../src/mock';
 
 import {
   BASE_UNITS_PER_CENT,
@@ -503,3 +505,41 @@ describe('confirmCharge', () => {
 
 });
 
+
+describe('checkCharge', () => {
+  const PAYEE = 'uhpn1gHscLtCv1vkLSjYNNFXpZyJnGz1ynXWM9WaD7X';
+  const mockCharge = (facts: Record<string, unknown>) => `mock-${Buffer.from(JSON.stringify(facts)).toString('base64url')}`;
+  const expected = { payer: MOCK_WALLET, payee: PAYEE, mint: HSUSD_MINT, amountCents: 500, memo: 'entry-1' };
+
+  beforeEach(() => {
+    vi.stubEnv('BANKROLL_MOCK', '1');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('reads the charge and answers it when it matches what was sold', async () => {
+    const signature = mockCharge({ amountCents: 500, payer: MOCK_WALLET, payee: PAYEE, memo: 'entry-1' });
+    await expect(checkCharge(signature, expected)).resolves.toMatchObject({ signature, amountCents: 500, memo: 'entry-1' });
+  });
+
+  it.each([
+    ['payee', { amountCents: 500, payer: MOCK_WALLET, payee: 'Other111', memo: 'entry-1' }],
+    ['payer', { amountCents: 500, payer: 'Other111', payee: PAYEE, memo: 'entry-1' }],
+    ['mint', { amountCents: 500, payer: MOCK_WALLET, payee: PAYEE, mint: 'Token111', memo: 'entry-1' }],
+    ['amountCents', { amountCents: 400, payer: MOCK_WALLET, payee: PAYEE, memo: 'entry-1' }],
+    ['memo', { amountCents: 500, payer: MOCK_WALLET, payee: PAYEE, memo: 'entry-2' }],
+  ])('names %s as the field that differs', async (field, facts) => {
+    const error = await checkCharge(mockCharge(facts), expected).catch((e) => e);
+    expect(error).toBeInstanceOf(ChargeMismatchError);
+    expect(error).toMatchObject({ field, charge: { signature: mockCharge(facts) } });
+  });
+
+  it('does not compare the memo when the terms leave it out, and treats null as "must carry none"', async () => {
+    const withMemo = mockCharge({ amountCents: 500, payer: MOCK_WALLET, payee: PAYEE, memo: 'anything' });
+    const { memo: _ignored, ...withoutMemo } = expected;
+    await expect(checkCharge(withMemo, withoutMemo)).resolves.toBeTruthy();
+    await expect(checkCharge(withMemo, { ...expected, memo: null })).rejects.toMatchObject({ field: 'memo' });
+  });
+});

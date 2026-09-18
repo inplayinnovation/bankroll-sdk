@@ -8,6 +8,7 @@ export default defineConfig({
     'src/manifest.ts',
     'src/privy.ts',
     'src/next.ts',
+    'src/webhooks.ts',
     'src/react.tsx',
     'src/mock.ts',
     'src/store/index.ts',

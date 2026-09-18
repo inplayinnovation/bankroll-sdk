@@ -1,4 +1,5 @@
 import { loadAppKey, signAppToken } from './app-auth';
+import { parseEndpoint } from './matchmaking-core';
 import { finite, invalid, MatchmakingError, record, snapshot, type MatchmakingErrorCode } from './matchmaking-core';
 import { mockMatchmaking } from './matchmaking-mock';
 import { mockEnabled } from './mock';
@@ -65,18 +66,11 @@ const SERVER_CODES = new Set<MatchmakingErrorCode>([
   'unauthenticated', 'app_not_verified', 'invalid_argument', 'ticket_conflict', 'queue_conflict', 'unavailable',
 ]);
 function endpoint(value: string, issuer: boolean): string {
-  try {
-    const url = new URL(value);
-    const host = url.hostname;
-    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(host);
-    if (url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error();
-    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback && !issuer)) throw new Error();
-    if (issuer && (url.origin !== value || !host.includes('.') || host.startsWith('[')
-      || /^\d+\.\d+\.\d+\.\d+$/.test(host) || ['.localhost', '.local', '.internal', '.home.arpa'].some((suffix) => host.endsWith(suffix)))) throw new Error();
-    return url.origin;
-  } catch {
+  const parsed = parseEndpoint(value, issuer);
+  if (parsed === null) {
     throw new MatchmakingError('invalid_argument', issuer ? 'origin must be a canonical public HTTPS origin' : 'apiUrl must be an HTTPS origin or loopback HTTP origin');
   }
+  return parsed;
 }
 function admission(value: unknown): value is Admission {
   if (!record(value) || !record(value.input) || !record(value.input.queue)) return false;
