@@ -26,7 +26,7 @@ import {
 import bs58 from 'bs58';
 
 import { BASE_UNITS_PER_CENT, HSUSD_DECIMALS, HSUSD_MINT } from './charges';
-import { isMockPayoutSignature, mockEnabled } from './mock';
+import { isMockPayoutSignature, isMockPayoutSigner, mockBuiltPayout, mockEnabled } from './mock';
 import { rpcUrl } from './rpc';
 import {
   createAssociatedTokenAccountIdempotentInstruction,
@@ -312,6 +312,10 @@ export async function buildPayout(
     return { recipient, mint, amount: BigInt(amountCents) * BASE_UNITS_PER_CENT };
   });
   const signer = options?.signer ?? defaultSigner();
+  // Under the mock, a mock signer's payout never reaches the chain, so no
+  // blockhash is fetched: the app's whole payout path runs with no RPC.
+  // Recipients and amounts were still checked above, the way they always are.
+  if (mockEnabled() && isMockPayoutSigner(signer)) return mockBuiltPayout(input);
   const treasury = new PublicKey(signer.address);
   if (!PublicKey.isOnCurve(treasury.toBytes())) {
     throw new Error(

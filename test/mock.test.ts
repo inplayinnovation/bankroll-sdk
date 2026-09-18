@@ -9,13 +9,14 @@ import {
   MOCK_WALLET,
   mockEnabled,
   mockHostScript,
+  MOCK_BLOCKHASH,
   mockPayoutSigner,
   mockSession,
   mockToken,
   parseMockSignature,
 } from '../src/mock';
 import { getSession } from '../src/next';
-import { confirmPayout } from '../src/payouts';
+import { buildPayout, confirmPayout } from '../src/payouts';
 import { findChargeByReference } from '../src/references';
 
 vi.mock('next/headers', () => ({
@@ -116,6 +117,25 @@ describe('getSession under the mock', () => {
 });
 
 describe('mock payouts', () => {
+  it('builds a payout for a mock signer without touching an RPC', async () => {
+    vi.stubEnv('BANKROLL_MOCK', '1');
+    vi.stubEnv('NODE_ENV', 'test');
+    const fetchMock = vi.fn(async () => { throw new Error('no RPC under the mock'); });
+    vi.stubGlobal('fetch', fetchMock);
+    const built = await buildPayout(
+      { recipients: [{ to: PAYEE, amountCents: 180 }, { to: PAYEE, amountCents: 0 }], memo: 'duel:1' },
+      { signer: mockPayoutSigner(PAYEE) },
+    );
+    expect(built.blockhash).toBe(MOCK_BLOCKHASH);
+    expect(built.lastValidBlockHeight).toBe(0);
+    expect(JSON.parse(Buffer.from(built.transaction, 'base64').toString())).toMatchObject({ mock: 'payout' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    // Still refuses what every build refuses.
+    await expect(buildPayout({ to: 'nope', amountCents: 1 }, { signer: mockPayoutSigner(PAYEE) })).rejects.toThrow(/not a valid address/);
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
   it('signs nothing and answers with a mock payout signature the mock confirms outright', async () => {
     const signer = mockPayoutSigner('Payee111');
     expect(signer.address).toBe('Payee111');

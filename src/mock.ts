@@ -176,11 +176,36 @@ export function isMockPayoutSignature(signature: string): boolean {
  * without money. Worthless in production, where the mock is never read.
  */
 export function mockPayoutSigner(address: string): PaymentSigner {
-  return {
+  const signer: PaymentSigner = {
     address,
     async sendTransaction(): Promise<string> {
       return `${MOCK_PAYOUT_PREFIX}${randomUUID()}`;
     },
+  };
+  mockSigners.add(signer);
+  return signer;
+}
+
+// The signers this file made, so buildPayout can tell one from a real signer
+// that happens to run with the flag on.
+const mockSigners = new WeakSet<PaymentSigner>();
+
+/** True for a signer `mockPayoutSigner` made. */
+export function isMockPayoutSigner(signer: PaymentSigner): boolean {
+  return mockSigners.has(signer);
+}
+
+/**
+ * What `buildPayout` answers for a mock signer under the mock: no blockhash
+ * is fetched and nothing can be broadcast, so the "transaction" is a marker,
+ * not wire bytes. Its signature is whatever the mock signer answers on send.
+ */
+export const MOCK_BLOCKHASH = 'mock-blockhash';
+export function mockBuiltPayout(input: unknown): { transaction: string; blockhash: string; lastValidBlockHeight: number } {
+  return {
+    transaction: Buffer.from(JSON.stringify({ mock: 'payout', input })).toString('base64'),
+    blockhash: MOCK_BLOCKHASH,
+    lastValidBlockHeight: 0,
   };
 }
 
