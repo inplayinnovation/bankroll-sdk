@@ -204,6 +204,25 @@ describe('under the mock', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('answers the same signature for the same payout bytes, so a resend learns what it sent', async () => {
+    const signer = mockPayoutSigner(PAYEE);
+    const built = mockBuiltPayout({ to: MOCK_WALLET, amountCents: 900 });
+    const first = await sendPayout(built.transaction, { signer });
+    const second = await sendPayout(built.transaction, { signer });
+    expect(second.signature).toBe(first.signature);
+    expect((await sendPayout(mockBuiltPayout({ to: MOCK_WALLET, amountCents: 901 }).transaction, { signer })).signature).not.toBe(first.signature);
+  });
+
+  it("says out loud when the route refuses the mock host's delivery", async () => {
+    const created = await createManagedReference({ meta: META }, { origin: ORIGIN });
+    const host = hostFrom(mockHostScript({ payee: PAYEE }));
+    fetchMock.mockResolvedValueOnce(Response.json({ error: 'invalid_event' }, { status: 500 }));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await host.pay!({ amountCents: 500, reference: created.reference });
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('answered 500'));
+    error.mockRestore();
+  });
+
   it('delivers reference.expired when the window ends, unless the route was told first', async () => {
     vi.useFakeTimers({ now: new Date('2026-09-18T18:00:00.000Z') });
     const silent = await createManagedReference({ meta: META, expiresInSeconds: 60 }, { origin: ORIGIN });

@@ -136,8 +136,10 @@ export function referenceWebhook(handlers: ReferenceWebhookHandlers): (request: 
     const event = parseEvent(body);
     if (!event) return Response.json({ error: 'invalid_event' }, { status: 400 });
     if (event.type === REFERENCE_CONFIRMED) {
-      if (mockEnabled()) noteMockConfirmed(event.reference);
       await handlers.onConfirmed(event);
+      // Only a handled confirmation silences the mock's expiry: a handler
+      // that threw gets the expiry the way it would get Bankroll's retry.
+      if (mockEnabled()) noteMockConfirmed(event.reference);
     } else {
       await handlers.onExpired(event);
     }

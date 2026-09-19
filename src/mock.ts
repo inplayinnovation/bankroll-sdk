@@ -16,7 +16,7 @@ import type { Json } from './matchmaking';
 // The server half is honoured ONLY when BANKROLL_MOCK=1 and NODE_ENV is not
 // production. A production build never reads the flag, so a token or
 // signature from this file is worthless against a deployment.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import type { PaymentSigner } from './payouts';
 import type { BankrollSession } from './server';
@@ -179,8 +179,11 @@ export function isMockPayoutSignature(signature: string): boolean {
 export function mockPayoutSigner(address: string): PaymentSigner {
   const signer: PaymentSigner = {
     address,
-    async sendTransaction(): Promise<string> {
-      return `${MOCK_PAYOUT_PREFIX}${randomUUID()}`;
+    async sendTransaction(txBase64: string): Promise<string> {
+      // The same bytes answer the same signature, the way a keypair's
+      // signature is a function of the bytes and a Privy replay answers the
+      // original send: a resend of a stored attempt learns its signature.
+      return `${MOCK_PAYOUT_PREFIX}${createHash('sha256').update(txBase64).digest('hex').slice(0, 32)}`;
     },
   };
   mockSigners.add(signer);
@@ -371,11 +374,14 @@ export function mockHostScript(options: MockHostOptions): string {
       // the signature, so a route that expects the webhook first is served.
       const reference = input && typeof input.reference === 'string' ? input.reference : null;
       if (reference && reference.startsWith(config.referencePrefix)) {
-        await fetch(config.webhookPath, {
+        const delivery = await fetch(config.webhookPath, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ type: config.confirmedEvent, reference, signature, slot: Date.now() }),
         });
+        // Bankroll would retry; the mock cannot, so a refusal is said out
+        // loud, where npm run check fails on it.
+        if (!delivery.ok) console.error('[bankroll mock] ' + config.webhookPath + ' answered ' + delivery.status + ' to reference.confirmed for ' + reference);
       }
       return signature;
     },
