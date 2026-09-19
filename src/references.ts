@@ -11,11 +11,11 @@
 // answers "did the charge I'm waiting on ever happen?"
 import bs58 from 'bs58';
 
-import { loadAppKey, signAppToken } from './app-auth';
+import { AppRequestFailure, postAsApp, type AppRequestCode, type AppRequestOptions } from './app-request';
 import { confirmCharge, ConfirmChargeError } from './charges';
 import type { ConfirmChargeOptions, ConfirmedCharge } from './charges';
 import type { Json } from './matchmaking';
-import { parseEndpoint, record, snapshot } from './matchmaking-core';
+import { record, snapshot } from './matchmaking-core';
 import { armMockExpiry, mockEnabled, mockReference } from './mock';
 import { PayError } from './payouts';
 import { rpcUrl } from './rpc';
@@ -240,29 +240,12 @@ export async function findPayoutByReference(reference: string): Promise<FoundPay
 // signer deliver `reference.confirmed` to the route themselves, and the
 // window's end delivers `reference.expired`.
 
-const API_URL_ENV = 'BANKROLL_API_URL';
-const DEFAULT_API_URL = 'https://api.joinbankroll.com';
 const REFERENCES_PATH = '/api/v1/references';
-const REQUEST_TIMEOUT_MS = 15_000;
 // Bankroll's default when the call names no window: charge()'s own window
 // plus time for the transaction to land.
 const DEFAULT_EXPIRES_SECONDS = 7 * 60;
 
-export type ManagedReferenceErrorCode =
-  | 'unauthenticated' // no usable app key, or Bankroll refused the credential
-  | 'app_not_verified' // the origin serves no Bankroll-signed manifest
-  | 'webhook_not_provisioned' // verified before webhooks existed; a re-sign fixes it
-  | 'invalid_argument'
-  | 'unavailable' // Bankroll could not be reached; nothing was created
-  | 'invalid_response';
-
-const SERVER_CODES = new Set<ManagedReferenceErrorCode>([
-  'unauthenticated',
-  'app_not_verified',
-  'webhook_not_provisioned',
-  'invalid_argument',
-  'unavailable',
-]);
+export type ManagedReferenceErrorCode = AppRequestCode;
 
 export class ManagedReferenceError extends Error {
   readonly code: ManagedReferenceErrorCode;
@@ -276,14 +259,7 @@ export class ManagedReferenceError extends Error {
   }
 }
 
-export interface ManagedReferenceOptions {
-  /** Canonical public HTTPS origin attested by the app's signed manifest. */
-  origin: string;
-  /** Defaults to BANKROLL_API_URL, then https://api.joinbankroll.com. */
-  apiUrl?: string;
-  /** Base58 Ed25519 64-byte app secret; defaults to BANKROLL_APP_KEY, then BANKROLL_PUSH_KEY. */
-  key?: string;
-}
+export type ManagedReferenceOptions = AppRequestOptions;
 
 export interface ManagedReferenceInput {
   /**
@@ -339,52 +315,19 @@ export async function createManagedReference(
     return { reference, expiresAt };
   }
 
-  const origin = parseEndpoint(options.origin, true) ?? invalidManaged('origin must be a canonical public HTTPS origin');
-  const apiUrl =
-    parseEndpoint(options.apiUrl ?? process.env[API_URL_ENV] ?? DEFAULT_API_URL, false) ??
-    invalidManaged('apiUrl must be an HTTPS origin or loopback HTTP origin');
-  let token: string;
+  let result: Record<string, unknown>;
   try {
-    const credential = loadAppKey(options.key);
-    if (!credential) throw new Error();
-    token = await signAppToken(origin, credential.key);
-  } catch {
-    throw new ManagedReferenceError('unauthenticated', 'A valid app credential is required');
-  }
-
-  const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-  let response: Response;
-  try {
-    response = await fetch(`${apiUrl}${REFERENCES_PATH}`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ meta, ...(expiresInSeconds === undefined ? {} : { expiresInSeconds }) }),
-      cache: 'no-store',
-      redirect: 'error',
-      signal,
-    });
-  } catch {
-    throw new ManagedReferenceError('unavailable', 'Bankroll could not be reached; no reference was created');
-  }
-  let result: unknown;
-  try {
-    result = await response.json();
-  } catch {
-    throw new ManagedReferenceError(
-      signal.aborted ? 'unavailable' : 'invalid_response',
-      'The reply from Bankroll could not be read',
-      response.status,
+    result = await postAsApp(
+      REFERENCES_PATH,
+      { meta, ...(expiresInSeconds === undefined ? {} : { expiresInSeconds }) },
+      options,
     );
+  } catch (error) {
+    if (error instanceof AppRequestFailure) throw new ManagedReferenceError(error.code, error.message, error.status);
+    throw error;
   }
-  if (!response.ok) {
-    const code = record(result) ? result.error : undefined;
-    if (typeof code === 'string' && SERVER_CODES.has(code as ManagedReferenceErrorCode)) {
-      throw new ManagedReferenceError(code as ManagedReferenceErrorCode, `Bankroll refused the reference: ${code}`, response.status);
-    }
-    throw new ManagedReferenceError('invalid_response', 'Unrecognized refusal from Bankroll', response.status);
-  }
-  if (!record(result) || typeof result.reference !== 'string' || typeof result.expiresAt !== 'string') {
-    throw new ManagedReferenceError('invalid_response', 'Malformed reply from Bankroll', response.status);
+  if (typeof result.reference !== 'string' || typeof result.expiresAt !== 'string') {
+    throw new ManagedReferenceError('invalid_response', 'Malformed reply from Bankroll');
   }
   return { reference: result.reference, expiresAt: result.expiresAt };
 }

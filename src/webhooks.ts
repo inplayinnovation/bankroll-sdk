@@ -1,19 +1,20 @@
-// Bankroll's webhooks to your app. Today one route: /api/bankroll/webhook,
-// where Bankroll reports on the managed references your server minted with
+// Bankroll's webhooks to your app, on one route: /api/bankroll/webhook.
+// Bankroll reports on the managed references your server minted with
 // createManagedReference() — `reference.confirmed` when the first successful
 // transaction carrying one lands, `reference.expired` when the window ends
-// with none. Bankroll reports the signature only and never judges: read the
-// transaction (checkCharge for a pay-in, confirmPayout for a payout) and
-// decide. Deliveries are signed; a signature that does not verify never
-// reaches a handler.
+// with none — and on the timers it set with createTimer(): `timer.fired`
+// when the time comes. Bankroll reports facts and never
+// judges: read a transaction (checkCharge for a pay-in) and decide.
+// Deliveries are signed; a signature that does not verify never reaches a
+// handler.
 //
-// Framework-free: referenceWebhook() returns a plain (Request) => Response
+// Framework-free: bankrollWebhook() returns a plain (Request) => Response
 // handler, which is a Next.js route handler as it stands.
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import type { Json } from './matchmaking';
 import { record } from './matchmaking-core';
-import { isMockReference, mockEnabled, noteMockConfirmed, parseMockReference } from './mock';
+import { isMockReference, isMockTimer, mockEnabled, noteMockConfirmed, parseMockReference, parseMockTimer } from './mock';
 
 /** Where Bankroll delivers reference events: the route referenceWebhook() serves. */
 export const WEBHOOK_PATH = '/api/bankroll/webhook';
@@ -26,6 +27,7 @@ const BODY_LIMIT_BYTES = 64 * 1024;
 
 export const REFERENCE_CONFIRMED = 'reference.confirmed';
 export const REFERENCE_EXPIRED = 'reference.expired';
+export const TIMER_FIRED = 'timer.fired';
 
 export interface ReferenceConfirmed {
   type: typeof REFERENCE_CONFIRMED;
@@ -46,9 +48,22 @@ export interface ReferenceExpired {
 
 export type ReferenceEvent = ReferenceConfirmed | ReferenceExpired;
 
-export interface ReferenceWebhookHandlers {
+export interface TimerFired {
+  type: typeof TIMER_FIRED;
+  id: string;
+  /** The meta the timer was set with, verbatim. */
+  meta: Json;
+  /** The time the timer was set for. */
+  at: string;
+}
+
+export type AppEvent = ReferenceEvent | TimerFired;
+
+export interface BankrollWebhookHandlers {
   onConfirmed(event: ReferenceConfirmed): Promise<void> | void;
   onExpired(event: ReferenceExpired): Promise<void> | void;
+  /** A timer fired. Optional: an app that sets no timers has nothing to hear. */
+  onFired?(event: TimerFired): Promise<void> | void;
   /** The endpoint secret Bankroll handed you at signing; defaults to BANKROLL_WEBHOOK_SECRET. */
   secret?: string;
 }
@@ -84,16 +99,23 @@ function verifySignature(headers: Headers, body: string, secret: string | undefi
   return 'invalid';
 }
 
-function parseEvent(body: string): ReferenceEvent | null {
+function parseEvent(body: string): AppEvent | null {
   let value: unknown;
   try {
     value = JSON.parse(body);
   } catch {
     return null;
   }
-  if (!record(value) || typeof value.reference !== 'string') return null;
-  // Under the mock the deliveries carry no meta: the reference does.
+  if (!record(value)) return null;
+  // Under the mock the deliveries carry no meta: the reference or the id does.
   const meta: Json | undefined = 'meta' in value ? (value.meta as Json) : undefined;
+  if (value.type === TIMER_FIRED) {
+    if (typeof value.id !== 'string' || typeof value.at !== 'string') return null;
+    const resolved = meta ?? (mockEnabled() && isMockTimer(value.id) ? parseMockTimer(value.id)?.meta : undefined);
+    if (resolved === undefined) return null;
+    return { type: TIMER_FIRED, id: value.id, meta: resolved, at: value.at };
+  }
+  if (typeof value.reference !== 'string') return null;
   const mocked = mockEnabled() && isMockReference(value.reference) ? parseMockReference(value.reference) : null;
   const resolved = meta ?? mocked?.meta;
   if (resolved === undefined) return null;
@@ -111,7 +133,7 @@ function parseEvent(body: string): ReferenceEvent | null {
 /**
  * The route handler for POST /api/bankroll/webhook:
  *
- *   export const POST = referenceWebhook({ onConfirmed, onExpired });
+ *   export const POST = bankrollWebhook({ onConfirmed, onExpired, onFired });
  *
  * A delivery whose signature does not verify is refused with 401 and never
  * reaches a handler. A handler that throws makes the route answer 500, which
@@ -123,7 +145,7 @@ function parseEvent(body: string): ReferenceEvent | null {
  * With BANKROLL_MOCK=1 outside production an unsigned delivery is accepted
  * too, so the mock host and the mock payout signer can drive the route.
  */
-export function referenceWebhook(handlers: ReferenceWebhookHandlers): (request: Request) => Promise<Response> {
+export function bankrollWebhook(handlers: BankrollWebhookHandlers): (request: Request) => Promise<Response> {
   return async function POST(request: Request): Promise<Response> {
     const body = await request.text();
     if (Buffer.byteLength(body) > BODY_LIMIT_BYTES) {
@@ -135,7 +157,9 @@ export function referenceWebhook(handlers: ReferenceWebhookHandlers): (request: 
     }
     const event = parseEvent(body);
     if (!event) return Response.json({ error: 'invalid_event' }, { status: 400 });
-    if (event.type === REFERENCE_CONFIRMED) {
+    if (event.type === TIMER_FIRED) {
+      await handlers.onFired?.(event);
+    } else if (event.type === REFERENCE_CONFIRMED) {
       await handlers.onConfirmed(event);
       // Only a handled confirmation silences the mock's expiry: a handler
       // that threw gets the expiry the way it would get Bankroll's retry.
@@ -146,3 +170,7 @@ export function referenceWebhook(handlers: ReferenceWebhookHandlers): (request: 
     return Response.json({ received: true });
   };
 }
+
+/** The 0.28 name; the route now carries timers too. */
+export const referenceWebhook = bankrollWebhook;
+export type ReferenceWebhookHandlers = BankrollWebhookHandlers;

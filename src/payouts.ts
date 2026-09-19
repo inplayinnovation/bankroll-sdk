@@ -27,7 +27,7 @@ import bs58 from 'bs58';
 
 import { BASE_UNITS_PER_CENT, HSUSD_DECIMALS, HSUSD_MINT } from './charges';
 import {
-  deliverMockReferenceEvent,
+  deliverMockEvent,
   isMockPayoutSignature,
   isMockPayoutSigner,
   mockBuiltPayout,
@@ -506,7 +506,7 @@ export async function sendPayout(
   // the event Bankroll would send reaches the app's webhook route from here.
   if (mockEnabled() && isMockPayoutSigner(signer)) {
     const reference = mockPayoutReference(transaction);
-    if (reference !== null) await deliverMockReferenceEvent(mockConfirmedEvent(reference, signature));
+    if (reference !== null) await deliverMockEvent(mockConfirmedEvent(reference, signature));
   }
   return { signature };
 }

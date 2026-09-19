@@ -284,7 +284,7 @@ export function mockPayoutReference(transaction: string): string | null {
 }
 
 /** Deliver an event to the dev server's own webhook route, the way Bankroll would. */
-export async function deliverMockReferenceEvent(event: Record<string, unknown>): Promise<void> {
+export async function deliverMockEvent(event: Record<string, unknown>): Promise<void> {
   const response = await fetch(`http://localhost:${process.env[PORT_ENV] ?? DEFAULT_PORT}${MOCK_WEBHOOK_PATH}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -310,7 +310,7 @@ export function armMockExpiry(reference: string, expiresAt: string): void {
   const timer = setTimeout(() => {
     if (confirmedMockReferences.has(reference)) return;
     // A timer has nobody to throw to; the dev console is where this belongs.
-    deliverMockReferenceEvent({ type: MOCK_EVENT_EXPIRED, reference, expiredAt: expiresAt }).catch((error) => {
+    deliverMockEvent({ type: MOCK_EVENT_EXPIRED, reference, expiredAt: expiresAt }).catch((error) => {
       console.error('[bankroll mock] reference.expired was not delivered:', error);
     });
   }, Math.max(0, Date.parse(expiresAt) - Date.now()));
@@ -392,4 +392,46 @@ export function mockHostScript(options: MockHostOptions): string {
     requestAmount: async () => ({ status: 'dismissed' }),
   };
 })();`;
+}
+
+// ---------------------------------------------------------------------------
+// Timers under the mock
+// ---------------------------------------------------------------------------
+//
+// createTimer() mints the id here: a marker carrying the meta and the time,
+// so the delivery needs no memory of it. A setTimeout delivers `timer.fired`
+// to the app's own webhook route when the time comes.
+
+export const MOCK_TIMER_PREFIX = `${MOCK_SIGNATURE_PREFIX}timer-`;
+const MOCK_EVENT_FIRED = 'timer.fired';
+
+export interface MockTimer {
+  meta: Json;
+  at: string;
+}
+
+export function mockTimer(meta: Json, at: string): string {
+  return MOCK_TIMER_PREFIX + base64url({ meta, at });
+}
+
+export function isMockTimer(id: string): boolean {
+  return id.startsWith(MOCK_TIMER_PREFIX);
+}
+
+/** The meta and time a mock timer id carries, or null if it is not one. */
+export function parseMockTimer(id: string): MockTimer | null {
+  if (!isMockTimer(id)) return null;
+  const marker = decodeJson(id.slice(MOCK_TIMER_PREFIX.length));
+  if (!marker || typeof marker.at !== 'string' || !('meta' in marker)) return null;
+  return { meta: marker.meta as Json, at: marker.at };
+}
+
+/** Deliver `timer.fired` when the time comes. */
+export function armMockTimer(id: string, at: string): void {
+  const timer = setTimeout(() => {
+    deliverMockEvent({ type: MOCK_EVENT_FIRED, id, at }).catch((error) => {
+      console.error('[bankroll mock] timer.fired was not delivered:', error);
+    });
+  }, Math.max(0, Date.parse(at) - Date.now()));
+  timer.unref?.();
 }

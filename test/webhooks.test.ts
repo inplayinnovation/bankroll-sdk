@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mockBuiltPayout, mockHostScript, mockPayoutSigner, MOCK_WALLET } from '../src/mock';
 import { sendPayout } from '../src/payouts';
 import { createManagedReference } from '../src/references';
-import { referenceWebhook, WEBHOOK_PATH, type ReferenceConfirmed, type ReferenceExpired } from '../src/webhooks';
+import { createTimer } from '../src/timers';
+import { bankrollWebhook, referenceWebhook, WEBHOOK_PATH, type ReferenceConfirmed, type ReferenceExpired, type TimerFired } from '../src/webhooks';
 
 const ORIGIN = 'https://game.example';
 const META = { entryId: 'entry-1', side: 'payin' };
@@ -52,7 +53,8 @@ function signed(body: string, options: { secret?: string; timestamp?: number; si
 const unsigned = (body: string) =>
   new Request(`${ORIGIN}${WEBHOOK_PATH}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
 
-const handlers = () => ({ onConfirmed: vi.fn(), onExpired: vi.fn() });
+const handlers = () => ({ onConfirmed: vi.fn(), onExpired: vi.fn(), onFired: vi.fn() });
+const fired: TimerFired = { type: 'timer.fired', id: '8412', meta: { kind: 'deadline', id: 'round-1' }, at: '2026-09-18T18:07:00.000Z' };
 
 function hostFrom(script: string) {
   const fakeWindow: { bankroll?: Record<string, (input?: unknown) => Promise<unknown>> } = {};
@@ -139,6 +141,23 @@ describe('referenceWebhook', () => {
   });
 });
 
+describe('bankrollWebhook and timers', () => {
+  it('hands a timer.fired to onFired, and acknowledges it when there is no onFired', async () => {
+    const handled = handlers();
+    expect((await bankrollWebhook(handled)(signed(JSON.stringify(fired)))).status).toBe(200);
+    expect(handled.onFired).toHaveBeenCalledWith(fired);
+    expect(handled.onConfirmed).not.toHaveBeenCalled();
+
+    const { onFired: _none, ...without } = handled;
+    expect((await bankrollWebhook(without)(signed(JSON.stringify(fired)))).status).toBe(200);
+    expect((await bankrollWebhook(without)(signed(JSON.stringify({ ...fired, at: 7 })))).status).toBe(400);
+  });
+
+  it('is the 0.28 name too', () => {
+    expect(referenceWebhook).toBe(bankrollWebhook);
+  });
+});
+
 describe('under the mock', () => {
   beforeEach(() => {
     vi.stubEnv('BANKROLL_MOCK', '1');
@@ -221,6 +240,24 @@ describe('under the mock', () => {
     await host.pay!({ amountCents: 500, reference: created.reference });
     expect(error).toHaveBeenCalledWith(expect.stringContaining('answered 500'));
     error.mockRestore();
+  });
+
+  it('delivers timer.fired to the dev server when the timer fires, and the route fills the meta in', async () => {
+    vi.useFakeTimers({ now: new Date('2026-09-18T18:00:00.000Z') });
+    const created = await createTimer({ meta: { kind: 'deadline', id: 'round-1' }, firesInMinutes: 1 }, { origin: ORIGIN });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toBe(`http://localhost:4242${WEBHOOK_PATH}`);
+    const body = init!.body as string;
+    expect(JSON.parse(body)).toEqual({ type: 'timer.fired', id: created.id, at: '2026-09-18T18:01:00.000Z' });
+
+    const handled = handlers();
+    expect((await bankrollWebhook(handled)(unsigned(body))).status).toBe(200);
+    expect(handled.onFired).toHaveBeenCalledWith({ type: 'timer.fired', id: created.id, meta: { kind: 'deadline', id: 'round-1' }, at: '2026-09-18T18:01:00.000Z' });
   });
 
   it('delivers reference.expired when the window ends, unless the route was told first', async () => {
