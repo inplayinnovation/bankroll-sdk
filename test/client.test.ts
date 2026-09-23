@@ -15,6 +15,7 @@ type BridgeShape = {
   identity?: unknown;
   pay?: unknown;
   haptics?: unknown;
+  promptReview?: unknown;
 };
 
 function setBridge(bridge: BridgeShape): void {
@@ -500,6 +501,34 @@ describe('haptics', () => {
     setBridge({ version: '4', identity: vi.fn(), pay: vi.fn(), haptics: hapticsFn });
     const { bankroll } = await load();
     await expect(bankroll.haptics()).resolves.toBeUndefined();
+  });
+});
+
+describe('promptReview', () => {
+  it('resolves silently with no host at all', async () => {
+    const { bankroll } = await load();
+    await expect(bankroll.promptReview()).resolves.toBeUndefined();
+  });
+
+  it('resolves silently on a host without the method', async () => {
+    setBridge({ version: '4', identity: vi.fn(), pay: vi.fn() });
+    const { bankroll } = await load();
+    await expect(bankroll.promptReview()).resolves.toBeUndefined();
+  });
+
+  it('asks a current host', async () => {
+    const promptReviewFn = vi.fn().mockResolvedValue(undefined);
+    setBridge({ version: '4', identity: vi.fn(), pay: vi.fn(), promptReview: promptReviewFn });
+    const { bankroll } = await load();
+    await expect(bankroll.promptReview()).resolves.toBeUndefined();
+    expect(promptReviewFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves silently when the bridge rejects', async () => {
+    const promptReviewFn = vi.fn().mockRejectedValue(new Error('bridge down'));
+    setBridge({ version: '4', identity: vi.fn(), pay: vi.fn(), promptReview: promptReviewFn });
+    const { bankroll } = await load();
+    await expect(bankroll.promptReview()).resolves.toBeUndefined();
   });
 });
 

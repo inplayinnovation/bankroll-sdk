@@ -227,5 +227,6 @@ describe('mockHostScript', () => {
     expect(await host.balances!()).toEqual({ cashCents: 500, creditsCents: 0, tokens: {} });
     expect(await host.requestAmount!()).toEqual({ status: 'dismissed' });
     expect(await host.haptics!({ type: 'light' })).toBeUndefined();
+    expect(await host.promptReview!()).toBeUndefined();
   });
 });

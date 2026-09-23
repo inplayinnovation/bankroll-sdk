@@ -388,6 +388,7 @@ export function mockHostScript(options: MockHostOptions): string {
     balances: async () => ({ cashCents: config.cashCents, creditsCents: 0, tokens: {} }),
     deposit: async () => undefined,
     haptics: async () => undefined,
+    promptReview: async () => undefined,
     quote: async () => undefined,
     requestAmount: async () => ({ status: 'dismissed' }),
   };

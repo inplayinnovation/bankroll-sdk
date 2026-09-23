@@ -89,6 +89,7 @@ Everything lives there and stays current:
 [Paying a user](https://docs.joinbankroll.com/build/payouts) ·
 [App tokens](https://docs.joinbankroll.com/build/app-tokens) ·
 [Balances and deposits](https://docs.joinbankroll.com/build/balances) ·
+[Reviews](https://docs.joinbankroll.com/build/reviews) ·
 [Notifications](https://docs.joinbankroll.com/build/push) ·
 [Matchmaking](https://docs.joinbankroll.com/build/matchmaking)
 

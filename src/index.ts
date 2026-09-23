@@ -549,6 +549,36 @@ async function haptics(input?: HapticsInput): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Reviews
+// ---------------------------------------------------------------------------
+
+const PROMPT_REVIEW_METHOD = 'promptReview';
+
+/**
+ * Ask the Bankroll host to show its thumbs up or down card now — at the moment
+ * your app knows is right, such as right after a player's first completed
+ * round.
+ *
+ * The host draws the card, records the answer, and limits how often any one
+ * player sees it, so calling often is harmless. Your app gets nothing back:
+ * this resolves with
+ * no value as soon as the host has taken the request, whether or not a card
+ * appears. Like haptics() it NEVER rejects — in a plain browser, under a host
+ * too old to have it, or on any bridge failure it resolves having done
+ * nothing. Verified apps only; an unverified app gets the same silent resolve.
+ */
+async function promptReview(): Promise<void> {
+  if (status() !== STATUS_READY) return;
+  const host = window.bankroll;
+  if (!host || typeof host[PROMPT_REVIEW_METHOD] !== 'function') return;
+  try {
+    await host.promptReview!();
+  } catch {
+    // A card that did not show is not an error worth surfacing.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Public surface
 // ---------------------------------------------------------------------------
 
@@ -561,6 +591,7 @@ export const bankroll = {
   balances,
   deposit,
   haptics,
+  promptReview,
 };
 
 // Canonical fetch decorator: attaches the session token on every request when
@@ -642,6 +673,9 @@ declare global {
       }): Promise<void>;
       // Host version 4+: fire the haptic engine; feature-detected.
       haptics?(input?: { type?: string }): Promise<void>;
+      // Ask for the host's thumbs card; feature-detected. Resolves with
+      // nothing once the host has taken the request.
+      promptReview?(): Promise<void>;
     };
     // Legacy marker set by older Bankroll app builds — a presence-only signal
     // used to tell an out-of-date app apart from a standalone browser.
