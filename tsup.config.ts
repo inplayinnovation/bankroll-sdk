@@ -6,6 +6,7 @@ export default defineConfig({
     'src/server.ts',
     'src/matchmaking.ts',
     'src/manifest.ts',
+    'src/restrictions.ts',
     'src/privy.ts',
     'src/next.ts',
     'src/webhooks.ts',

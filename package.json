@@ -1,6 +1,6 @@
 {
   "name": "@joinbankroll/sdk",
-  "version": "0.29.0",
+  "version": "0.30.1",
   "description": "Build on Bankroll \u2014 typed client for the window.bankroll bridge, plus server-side session verification, charge confirmation, and payouts",
   "license": "MIT",
   "repository": {
@@ -76,6 +76,11 @@
       "types": "./dist/manifest.d.ts",
       "import": "./dist/manifest.js",
       "default": "./dist/manifest.js"
+    },
+    "./restrictions": {
+      "types": "./dist/restrictions.d.ts",
+      "import": "./dist/restrictions.js",
+      "default": "./dist/restrictions.js"
     }
   },
   "scripts": {
@@ -157,6 +162,12 @@
       ],
       "matchmaking": [
         "./dist/matchmaking.d.ts"
+      ],
+      "restrictions": [
+        "./dist/restrictions.d.ts"
+      ],
+      "manifest": [
+        "./dist/manifest.d.ts"
       ]
     }
   }
