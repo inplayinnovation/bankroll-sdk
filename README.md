@@ -77,7 +77,7 @@ const signer = delegatedPrivySigner({ idempotencyKey: `payout-${orderId}` })
 await pay({ to: session.user.wallet, amountCents: 2500 }, { signer })
 ```
 
-## 📚 [Read the docs →](https://docs.joinbankroll.com/build/overview)
+## 📚 [Read the docs →](https://docs.joinbankroll.com/build/quickstart)
 
 Everything lives there and stays current:
 [Quickstart](https://docs.joinbankroll.com/build/quickstart) ·
