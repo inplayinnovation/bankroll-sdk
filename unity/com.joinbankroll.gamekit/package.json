@@ -1,8 +1,8 @@
 {
   "name": "com.joinbankroll.gamekit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "displayName": "Bankroll Game Kit",
-  "description": "Shared building blocks for Bankroll async 1v1 skill games: seeded randomness, round flow, and the one-settings-file rule.",
+  "description": "Shared building blocks for Bankroll async 1v1 skill games: seeded randomness, round flow, the one-settings-file rule, and the link to the Bankroll app (web build, haptics, safe area, results).",
   "unity": "6000.3",
   "author": {
     "name": "Bankroll"

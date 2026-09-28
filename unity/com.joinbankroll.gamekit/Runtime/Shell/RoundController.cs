@@ -39,8 +39,14 @@ namespace Bankroll.GameKit.Shell
         public event Action<float> PostRoundTick;
         public event Action<RoundEndReason> Ended;
         public event Action<int> ScoreChanged;
+        /// <summary>
+        /// The player tapped to continue after the round. A host link handles this (e.g. hands the result to the
+        /// Bankroll app); with no listener, the round simply restarts.
+        /// </summary>
+        public event Action ContinueRequested;
 
         bool _startRequested;
+        bool _continued;
         float _endedAt;
 
         void Awake()
@@ -57,8 +63,11 @@ namespace Bankroll.GameKit.Shell
             bool tapped = Pointer.current != null && Pointer.current.press.wasPressedThisFrame;
             if (Phase == RoundPhase.WaitingToStart && (tapped || AutoStart))
                 _startRequested = true;
-            else if (Phase == RoundPhase.Ended && tapped && Time.time - _endedAt >= config.continueDelaySeconds)
+            else if (Phase == RoundPhase.Ended && tapped && !_continued && Time.time - _endedAt >= config.continueDelaySeconds)
+            {
+                _continued = true; // one continue per round, however many taps
                 Continue();
+            }
         }
 
         void FixedUpdate()
@@ -111,8 +120,11 @@ namespace Bankroll.GameKit.Shell
 
         void Continue()
         {
-            // TODO(platform): report the final score to the host app instead of restarting.
-            SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+            if (ContinueRequested != null) ContinueRequested.Invoke();
+            else Restart();
         }
+
+        /// <summary>Starts a fresh round by reloading the scene.</summary>
+        public void Restart() => SceneManager.LoadScene(SceneManager.GetActiveScene().name);
     }
 }
