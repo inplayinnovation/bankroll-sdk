@@ -1,3 +1,4 @@
+using Bankroll.GameKit.Core;
 using Bankroll.GameKit.Shell;
 using UnityEngine;
 
@@ -42,7 +43,7 @@ namespace Bankroll.GameKit.Platform
                 reason = round.EndReason == RoundEndReason.TimeUp ? "time_up" : "died",
                 seed = round.Seed.ToString(), // as text: a 64-bit seed doesn't fit a JavaScript number
                 configVersion = round.Config.configVersion,
-                secondsPlayed = round.ElapsedSeconds,
+                secondsPlayed = round.Round.SecondsPlayed,
             };
             HostBridge.Send("close", JsonUtility.ToJson(result));
         }
