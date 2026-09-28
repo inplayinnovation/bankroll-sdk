@@ -59,6 +59,12 @@ namespace Bankroll.GameKit.Core
         /// <summary>True with the given probability (0 to 1).</summary>
         public bool Chance(float probability) => NextFloat() < probability;
 
+        /// <summary>Uniform fixed-point number in [0, 1). Game rules use this rather than the float versions.</summary>
+        public Fix NextFix() => Fix.FromRaw(NextUInt() >> (32 - Fix.FractionBits));
+
+        /// <summary>Uniform fixed-point number in [min, max).</summary>
+        public Fix Range(Fix min, Fix max) => min + (max - min) * NextFix();
+
         /// <summary>
         /// Mixes a seed with a salt into a new, well-spread seed (SplitMix64). Use it to give every object
         /// its own seed, e.g. each ball in a spawn sequence and each of its children.
