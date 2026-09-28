@@ -54,6 +54,11 @@ namespace Bankroll.GameKit.Shell
             Time.fixedDeltaTime = 1f / config.simulationStepsPerSecond;
             TimeRemaining = config.roundDurationSeconds;
             Seed = config.devSeed != 0 ? (ulong)config.devSeed : (ulong)DateTime.UtcNow.Ticks;
+#if UNITY_EDITOR
+            // With the Editor in the background, nothing holds Play mode to the screen's refresh rate and it
+            // spins at over 1,000 frames a second. Web builds follow the browser's frame rate instead.
+            if (Application.targetFrameRate <= 0) Application.targetFrameRate = 60;
+#endif
         }
 
         void Start() => Prepared?.Invoke(Seed);
