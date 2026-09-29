@@ -81,6 +81,11 @@
       "types": "./dist/restrictions.d.ts",
       "import": "./dist/restrictions.js",
       "default": "./dist/restrictions.js"
+    },
+    "./game-core": {
+      "types": "./dist/game-core.d.ts",
+      "import": "./dist/game-core.js",
+      "default": "./dist/game-core.js"
     }
   },
   "scripts": {

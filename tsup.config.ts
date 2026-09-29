@@ -7,6 +7,7 @@ export default defineConfig({
     'src/matchmaking.ts',
     'src/manifest.ts',
     'src/restrictions.ts',
+    'src/game-core.ts',
     'src/privy.ts',
     'src/next.ts',
     'src/webhooks.ts',
