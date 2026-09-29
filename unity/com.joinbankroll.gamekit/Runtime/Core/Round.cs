@@ -5,9 +5,10 @@ namespace Bankroll.GameKit.Core
     public enum RoundEndReason { TimeUp, PlayerDied }
 
     /// <summary>
-    /// What every round shares, in plain C#: a clock that counts fixed ticks, the score, and how the round
-    /// ended. A game's simulation owns one and steps it once per tick; RoundController only reads it. It never
-    /// touches Unity or the wall clock, so a server re-running a round gets the same clock and score.
+    /// What every round shares, in plain C#: a clock that counts fixed ticks, the score, how the round ended,
+    /// and the input that played it. A game's simulation owns one and steps it once per tick; RoundController
+    /// only reads it. It never touches Unity or the wall clock, so a server re-running a round gets the same
+    /// clock and score.
     /// </summary>
     public sealed class Round
     {
@@ -29,6 +30,12 @@ namespace Bankroll.GameKit.Core
         public int Score { get; private set; }
         public RoundEndReason? EndReason { get; private set; }
         public bool Ended => EndReason.HasValue;
+
+        /// <summary>
+        /// The input of every tick of play, the one that ends the round included, as the game's simulation
+        /// consumed it. With the seed, it replays the round.
+        /// </summary>
+        public InputLog Inputs { get; } = new InputLog();
 
         /// <summary>Seconds of play so far, for display and reports.</summary>
         public float SecondsPlayed => (float)TicksPlayed / TicksPerSecond;

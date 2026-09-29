@@ -21,6 +21,7 @@ namespace Bankroll.GameKit.Platform
             public string seed;
             public string configVersion;
             public float secondsPlayed;
+            public string inputs; // the round's InputLog, encoded: with the seed, a server replays the round
         }
 
         void OnEnable() => round.ContinueRequested += OnContinue;
@@ -44,6 +45,7 @@ namespace Bankroll.GameKit.Platform
                 seed = round.Seed.ToString(), // as text: a 64-bit seed doesn't fit a JavaScript number
                 configVersion = round.Config.configVersion,
                 secondsPlayed = round.Round.SecondsPlayed,
+                inputs = round.Round.Inputs.Encode(),
             };
             HostBridge.Send("close", JsonUtility.ToJson(result));
         }
