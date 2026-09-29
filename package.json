@@ -57,6 +57,11 @@
       "import": "./dist/react.js",
       "default": "./dist/react.js"
     },
+    "./game": {
+      "types": "./dist/game.d.ts",
+      "import": "./dist/game.js",
+      "default": "./dist/game.js"
+    },
     "./mock": {
       "types": "./dist/mock.d.ts",
       "import": "./dist/mock.js",

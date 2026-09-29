@@ -16,7 +16,8 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const DIST = 'dist';
-const CLIENT_ENTRY = 'react.js';
+// Every entry that ships React components: each must keep the directive and leave React external.
+const CLIENT_ENTRIES = ['react.js', 'game.js'];
 const DIRECTIVE = '"use client";';
 // The inlined CommonJS copy of React, if it ever gets bundled.
 const INLINED_REACT = 'react.production';
@@ -34,28 +35,30 @@ async function jsFiles(directory) {
 }
 
 const files = await jsFiles(DIST);
-const clientEntry = join(DIST, CLIENT_ENTRY);
+const clientEntries = CLIENT_ENTRIES.map((name) => join(DIST, name));
 
-const client = await readFile(clientEntry, 'utf8');
+for (const clientEntry of clientEntries) {
+  const client = await readFile(clientEntry, 'utf8');
 
-if (!client.startsWith(DIRECTIVE)) {
-  failures.push(
-    `${clientEntry} must start with ${DIRECTIVE} — it starts with ${JSON.stringify(
-      client.slice(0, 40),
-    )}. The directive is dropped unless the file is a tsup entry with it on line 1.`,
-  );
-}
+  if (!client.startsWith(DIRECTIVE)) {
+    failures.push(
+      `${clientEntry} must start with ${DIRECTIVE} — it starts with ${JSON.stringify(
+        client.slice(0, 40),
+      )}. The directive is dropped unless the file is a tsup entry with it on line 1.`,
+    );
+  }
 
-if (client.includes(INLINED_REACT)) {
-  failures.push(
-    `${clientEntry} has React bundled into it. Add "react" to peerDependencies so tsup treats it as external.`,
-  );
+  if (client.includes(INLINED_REACT)) {
+    failures.push(
+      `${clientEntry} has React bundled into it. Add "react" to peerDependencies so tsup treats it as external.`,
+    );
+  }
 }
 
 // A directive anywhere else means a server-only entry would be treated as a
 // client module by the consuming bundler.
 for (const file of files) {
-  if (file === clientEntry) continue;
+  if (clientEntries.includes(file)) continue;
   const contents = await readFile(file, 'utf8');
   if (contents.startsWith(DIRECTIVE)) failures.push(`${file} unexpectedly carries ${DIRECTIVE}`);
 }
@@ -66,4 +69,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`Build verified: ${files.length} files, client entry intact, React external.`);
+console.log(`Build verified: ${files.length} files, ${clientEntries.length} client entries intact, React external.`);

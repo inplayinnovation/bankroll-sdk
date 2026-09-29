@@ -12,6 +12,7 @@ export default defineConfig({
     'src/next.ts',
     'src/webhooks.ts',
     'src/react.tsx',
+    'src/game.tsx',
     'src/mock.ts',
     'src/store/index.ts',
     'src/store/fs.ts',
