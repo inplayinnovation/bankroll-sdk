@@ -17,11 +17,29 @@ namespace Bankroll.GameKit.Editor
         /// <summary>Where the build goes, relative to the Unity project: the app's public/game/.</summary>
         public const string OutputPath = "../public/game";
 
+        /// <summary>The page template that bridges the game and the Bankroll app.</summary>
+        public const string TemplateName = "Bankroll";
+
+        // The kit ships the template in a folder whose name ends in "~", which Unity ignores, and Unity only
+        // reads templates from the project's Assets/WebGLTemplates, so a build copies it there.
+        const string PackageTemplateFolder = "WebGLTemplates~";
+        const string ProjectTemplateFolder = "Assets/WebGLTemplates";
+
+        /// <summary>
+        /// The template setting for the page's background, shown until the game draws: each game sets its own
+        /// colour in Player settings. A project that has none gets <see cref="DefaultBackground"/>.
+        /// </summary>
+        public const string BackgroundSetting = "BANKROLL_BACKGROUND";
+        public const string DefaultBackground = "#000000";
+
         [MenuItem("Bankroll/Apply Web Build Settings")]
         public static void ApplySettings()
         {
-            // The page template that bridges the game and the Bankroll app (Assets/WebGLTemplates/Bankroll).
-            PlayerSettings.WebGL.template = "PROJECT:Bankroll";
+            // The page template that bridges the game and the Bankroll app, copied in from the kit.
+            InstallTemplate();
+            PlayerSettings.WebGL.template = "PROJECT:" + TemplateName;
+            if (string.IsNullOrEmpty(PlayerSettings.GetTemplateCustomValue(BackgroundSetting)))
+                PlayerSettings.SetTemplateCustomValue(BackgroundSetting, DefaultBackground);
             // Brotli files, served with Content-Encoding: br by the app (next.config.ts), so browsers
             // decompress natively and no JavaScript decompressor ships.
             PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Brotli;
@@ -32,6 +50,31 @@ namespace Bankroll.GameKit.Editor
             // WebGL 2 only. Mobile WebViews don't enable WebGPU, and leaving it out keeps the build smaller.
             PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.WebGL, false);
             PlayerSettings.SetGraphicsAPIs(BuildTarget.WebGL, new[] { GraphicsDeviceType.OpenGLES3 });
+        }
+
+        /// <summary>
+        /// Copies the kit's page template into Assets/WebGLTemplates/Bankroll when the project's copy differs,
+        /// so every game builds with the kit's current page. The project's copy is committed with the game.
+        /// </summary>
+        public static void InstallTemplate()
+        {
+            var package = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(BankrollWebBuild).Assembly);
+            if (package == null)
+                throw new System.InvalidOperationException("The Bankroll game kit is not installed as a package.");
+
+            string source = Path.Combine(package.resolvedPath, PackageTemplateFolder, TemplateName);
+            string target = Path.Combine(ProjectTemplateFolder, TemplateName);
+            bool changed = false;
+            foreach (string file in Directory.GetFiles(source))
+            {
+                string destination = Path.Combine(target, Path.GetFileName(file));
+                if (File.Exists(destination) && File.ReadAllBytes(destination).SequenceEqual(File.ReadAllBytes(file)))
+                    continue;
+                Directory.CreateDirectory(target);
+                File.Copy(file, destination, overwrite: true);
+                changed = true;
+            }
+            if (changed) AssetDatabase.Refresh();
         }
 
         /// <summary>Empties the output folder, after checking it really is inside the Bankroll app.</summary>
