@@ -1,6 +1,7 @@
 using System.IO;
 using System.Linq;
 using UnityEditor;
+using UnityEditor.Build.Reporting;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -55,6 +56,10 @@ namespace Bankroll.GameKit.Editor
             string[] scenes = EditorBuildSettings.scenes.Where(scene => scene.enabled).Select(scene => scene.path).ToArray();
             var report = BuildPipeline.BuildPlayer(scenes, output, BuildTarget.WebGL, BuildOptions.None);
             Debug.Log($"[Bankroll] Web build {report.summary.result}: {report.summary.totalSize / (1024f * 1024f):F1} MB in {output}");
+            // A failed build must fail loudly. In batch mode the exception ends Unity with a non-zero exit
+            // code, so a script or the builder's runner sees it.
+            if (report.summary.result != BuildResult.Succeeded)
+                throw new System.InvalidOperationException($"Unity web build failed: {report.summary.result}");
         }
     }
 }
