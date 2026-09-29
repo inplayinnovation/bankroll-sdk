@@ -20,7 +20,10 @@ export const DEFAULT_GAME_PAGE = '/game/index.html';
 /** The page's colour before the game draws, the same default as the kit's BANKROLL_BACKGROUND. */
 export const DEFAULT_GAME_BACKGROUND = '#000000';
 
-/** How a round ended. pause_ran_out: a paid round used up its pause allowance; the score so far counts. */
+/**
+ * How a round ends in the kit's own round flow (RoundController). pause_ran_out: a paid round used up its
+ * pause allowance; the score so far counts. A game with its own flow sends its own reasons.
+ */
 export type RoundEndReason = 'time_up' | 'died' | 'pause_ran_out';
 
 /** Practice pauses freely; a paid round gives its pauses an allowance. The game reads it from its address. */
@@ -29,12 +32,15 @@ export type RoundMode = 'practice' | 'paid';
 /** What the game hands back when the player taps to continue. */
 export interface RoundResult {
   score: number;
-  reason: RoundEndReason;
+  /** How the round ended, in the game's words: the kit's RoundEndReason, or the game's own. */
+  reason: string;
   seed: string;
   configVersion: string;
   secondsPlayed: number;
   /** Every tick's input, encoded (InputLog in @joinbankroll/sdk/game-core). With the seed, it replays the round. */
   inputs: string;
+  /** The whole close message, for the game's own fields (kicks made, a replay flag, and so on). */
+  payload: Record<string, unknown>;
 }
 
 /** One message from the game: loading, ready, haptics, close, error, or a game's own. */
@@ -54,6 +60,8 @@ const HAPTIC_TYPES: ReadonlySet<string> = new Set<HapticType>([
   'error',
 ]);
 const MODE_PARAM = 'mode';
+// The player's reduced-motion setting, sent to every game on ready and whenever it changes.
+const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 const DEFAULT_MODE: RoundMode = 'practice';
 const FAILED_TO_START = 'The game could not start.';
 const LOADING_TEXT = 'Loading';
@@ -64,19 +72,26 @@ export function isRoundEndReason(value: unknown): value is RoundEndReason {
   return typeof value === 'string' && ROUND_END_REASONS.has(value);
 }
 
-/** The round's result from a close message, or null when the payload is not one. */
+/** The round's result from a close message, or null when it has no score or no reason. */
 export function parseRoundResult(payload: Record<string, unknown> | null): RoundResult | null {
   if (!payload) return null;
   const score = Number(payload.score);
-  if (!Number.isFinite(score) || !isRoundEndReason(payload.reason)) return null;
+  const { reason } = payload;
+  if (!Number.isFinite(score) || typeof reason !== 'string' || reason === '') return null;
   return {
     score: Math.max(0, Math.floor(score)),
-    reason: payload.reason,
+    reason,
     seed: String(payload.seed ?? ''),
     configVersion: String(payload.configVersion ?? ''),
     secondsPlayed: Number(payload.secondsPlayed) || 0,
     inputs: typeof payload.inputs === 'string' ? payload.inputs : '',
+    payload,
   };
+}
+
+/** Sends one message to the game in a frame, on the page's own origin. For an app's own messages. */
+export function postToGame(frame: HTMLIFrameElement | null | undefined, type: string, payload: unknown = null): void {
+  frame?.contentWindow?.postMessage({ source: APP_MESSAGE_SOURCE, type, payload }, window.location.origin);
 }
 
 /**
@@ -102,7 +117,7 @@ export function gamePageUrl(src: string, mode: RoundMode): string {
 }
 
 export interface GameFrameProps {
-  /** Called once the player taps to continue at the end of a round. */
+  /** Called once per round, when the player taps to continue. A game that replays in place sends ready again. */
   onResult: (result: RoundResult) => void;
   /** The frame's accessible name: the game's name. */
   title: string;
@@ -161,8 +176,9 @@ const probeStyle: CSSProperties = {
 
 /**
  * The frame a Unity game built with the Bankroll game kit runs in. It shows loading progress, plays the
- * game's haptics through Bankroll, sends the safe-area insets, and hands back the round's result. The game's
- * page pauses the round itself when the app is hidden. It fills its positioned parent.
+ * game's haptics through Bankroll, sends the safe-area insets and the reduced-motion setting, and hands back
+ * the round's result once per round. The game's page pauses the round itself when the app is hidden. It
+ * fills its positioned parent.
  */
 export function GameFrame({
   onResult,
@@ -181,19 +197,23 @@ export function GameFrame({
   const [progress, setProgress] = useState(0);
   const [ready, setReady] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  // One result per round: a duplicate close is ignored until the game says ready again.
+  const resulted = useRef(false);
 
   const sendSafeArea = useCallback(() => {
     const element = probe.current;
-    const game = frame.current?.contentWindow;
-    if (!element || !game) return;
+    if (!element) return;
     const style = getComputedStyle(element);
-    const payload = {
+    postToGame(frame.current, 'safe_area', {
       top: parseFloat(style.paddingTop) || 0,
       right: parseFloat(style.paddingRight) || 0,
       bottom: parseFloat(style.paddingBottom) || 0,
       left: parseFloat(style.paddingLeft) || 0,
-    };
-    game.postMessage({ source: APP_MESSAGE_SOURCE, type: 'safe_area', payload }, window.location.origin);
+    });
+  }, [frame]);
+
+  const sendPreferences = useCallback(() => {
+    postToGame(frame.current, 'preferences', { reducedMotion: window.matchMedia(REDUCED_MOTION_QUERY).matches });
   }, [frame]);
 
   useEffect(() => {
@@ -209,8 +229,10 @@ export function GameFrame({
           break;
         }
         case 'ready':
+          resulted.current = false;
           setReady(true);
           sendSafeArea();
+          sendPreferences();
           break;
         case 'haptics': {
           const type = payload?.type;
@@ -220,7 +242,10 @@ export function GameFrame({
         }
         case 'close': {
           const result = parseRoundResult(payload);
-          if (result) onResult(result);
+          if (result && !resulted.current) {
+            resulted.current = true;
+            onResult(result);
+          }
           break;
         }
         case 'error':
@@ -228,13 +253,16 @@ export function GameFrame({
           break;
       }
     };
+    const motion = window.matchMedia(REDUCED_MOTION_QUERY);
     window.addEventListener('message', receive);
     window.addEventListener('resize', sendSafeArea);
+    motion.addEventListener('change', sendPreferences);
     return () => {
       window.removeEventListener('message', receive);
       window.removeEventListener('resize', sendSafeArea);
+      motion.removeEventListener('change', sendPreferences);
     };
-  }, [frame, onMessage, onResult, sendSafeArea]);
+  }, [frame, onMessage, onResult, sendPreferences, sendSafeArea]);
 
   return (
     <div style={{ ...layer, background }}>

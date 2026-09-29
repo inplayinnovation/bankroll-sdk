@@ -64,14 +64,29 @@ describe('readGameMessage', () => {
 
 describe('parseRoundResult', () => {
   it('reads a close payload', () => {
-    expect(
-      parseRoundResult({ score: 86.7, reason: 'died', seed: 42, configVersion: '0.5.0', secondsPlayed: 17, inputs: 'AQ' }),
-    ).toEqual({ score: 86, reason: 'died', seed: '42', configVersion: '0.5.0', secondsPlayed: 17, inputs: 'AQ' });
+    const payload = { score: 86.7, reason: 'died', seed: 42, configVersion: '0.5.0', secondsPlayed: 17, inputs: 'AQ' };
+    expect(parseRoundResult(payload)).toEqual({
+      score: 86,
+      reason: 'died',
+      seed: '42',
+      configVersion: '0.5.0',
+      secondsPlayed: 17,
+      inputs: 'AQ',
+      payload,
+    });
   });
 
-  it('refuses a payload without a score or a known reason', () => {
+  // Windy Kicker ends rounds with its own reasons and sends its own fields.
+  it("keeps a game's own reason and fields", () => {
+    const result = parseRoundResult({ score: 150, reason: 'misses', kicks: 6, replay: true });
+    expect(result?.reason).toBe('misses');
+    expect(result?.payload.kicks).toBe(6);
+  });
+
+  it('refuses a payload without a score or a reason', () => {
     expect(parseRoundResult({ score: 'x', reason: 'died' })).toBeNull();
-    expect(parseRoundResult({ score: 3, reason: 'quit' })).toBeNull();
+    expect(parseRoundResult({ score: 3, reason: '' })).toBeNull();
+    expect(parseRoundResult({ score: 3 })).toBeNull();
     expect(parseRoundResult(null)).toBeNull();
   });
 
