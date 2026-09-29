@@ -2,7 +2,13 @@ using System;
 
 namespace Bankroll.GameKit.Core
 {
-    public enum RoundEndReason { TimeUp, PlayerDied }
+    public enum RoundEndReason
+    {
+        TimeUp,
+        PlayerDied,
+        /// <summary>A paid round used up its pause allowance. The score so far counts.</summary>
+        PauseRanOut,
+    }
 
     /// <summary>
     /// What every round shares, in plain C#: a clock that counts fixed ticks, the score, how the round ended,
