@@ -96,6 +96,7 @@
   "scripts": {
     "build": "tsup && node scripts/verify-build.mjs",
     "prepack": "npm run build",
+    "prepare": "npm run build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
