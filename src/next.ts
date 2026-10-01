@@ -9,6 +9,7 @@ import { headers } from 'next/headers';
 
 import { appAddress } from './app-auth';
 import { BANKROLL_TOKEN_HEADER } from './constants';
+import { appEnvironment } from './environment';
 import { MANIFEST_TYP, manifestClaims, type AppTokens } from './manifest';
 import { mockEnabled, mockSession } from './mock';
 import { verifyToken, type BankrollSession } from './server';
@@ -196,6 +197,9 @@ export function manifestRoute(app: ManifestApp): (request?: Request) => Promise<
       supportUrl: app.supportUrl?.(),
       iconDigest: app.iconDigest?.(),
       appTokens: app.appTokens?.(),
+      // From BANKROLL_ENVIRONMENT, which Bankroll sets on a test deployment:
+      // the claim that makes the host charge this deployment in test cash.
+      environment: appEnvironment(),
     });
 
     return new Response(`${base64url(header)}.${base64url(payload)}.`, {

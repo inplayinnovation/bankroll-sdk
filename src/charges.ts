@@ -4,10 +4,24 @@
 // in what asset, how much, and the memo. Comparing those facts to the order,
 // and storing the signature against replay, is deliberately left to the app:
 // the SDK observes, the app decides.
+import { APP_ENVIRONMENT, appEnvironment } from './environment';
 import { isMockSignature, mockEnabled, parseMockSignature } from './mock';
 import { rpcUrl } from './rpc';
 
-export const HSUSD_MINT = '4FVaHEubcqws8hKwJSiW8f8CmKGUyMsBxTKUytcGdRvd';
+/** Bankroll Cash (BCASH), the money of a live app. */
+export const BCASH_MINT = '4FVaHEubcqws8hKwJSiW8f8CmKGUyMsBxTKUytcGdRvd';
+/**
+ * Test cash, the money of an app's test environment: the same shape as BCASH,
+ * unlimited, worth nothing anywhere. Bankroll mints it from a faucet.
+ */
+export const TEST_CASH_MINT = 'BSHVy5kVBKrrPtD2kasMQKacqzUEMQE2DVGJckNEi2Jf';
+/**
+ * The mint cash settles in for THIS deployment: BCASH, or test cash when
+ * BANKROLL_ENVIRONMENT=test, which Bankroll sets on an app's test deployments.
+ * Every charge and payout defaults to it, so an app's code is the same in
+ * both environments; only the money differs.
+ */
+export const HSUSD_MINT = appEnvironment() === APP_ENVIRONMENT.test ? TEST_CASH_MINT : BCASH_MINT;
 export const HSUSD_DECIMALS = 9;
 /** Payments are denominated in whole US cents; HSUSD has 9 decimals. */
 export const BASE_UNITS_PER_CENT = 10n ** 7n;

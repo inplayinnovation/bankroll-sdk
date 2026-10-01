@@ -55,3 +55,27 @@ describe('manifestClaims', () => {
     expect(manifestClaims({ ...BASE, appTokens: { '': {} } })).not.toHaveProperty('appTokens');
   });
 });
+
+// The environment claim (Bankroll's notes/app-environments.md): a test
+// deployment says so; a live one says nothing, so every manifest signed before
+// the claim existed still signs to the same bytes.
+describe('manifestClaims environment', () => {
+  it('declares a test environment, between capabilities and iconDigest', () => {
+    const claims = manifestClaims({ ...BASE, environment: 'test', iconDigest: 'sha256-abc' });
+    expect(claims.environment).toBe('test');
+    expect(Object.keys(claims)).toEqual([
+      'aud',
+      'capabilities',
+      'environment',
+      'iconDigest',
+      'launch',
+      'manifestVersion',
+      'name',
+      'sub',
+    ]);
+  });
+
+  it.each(['live', null, undefined] as const)('says nothing for %s', (environment) => {
+    expect(manifestClaims({ ...BASE, environment })).not.toHaveProperty('environment');
+  });
+});

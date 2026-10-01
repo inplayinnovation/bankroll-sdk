@@ -108,7 +108,7 @@ optional entry brings its own peer so you install only what you use.
 | Entry | What it is |
 |---|---|
 | `@joinbankroll/sdk` | Browser client. No runtime imports — none of the server half's dependencies reach the browser bundle. SSR-safe. |
-| `@joinbankroll/sdk/server` | Token verification, charge confirmation, payouts, treasury, app public key, and notifications |
+| `@joinbankroll/sdk/server` | Token verification, charge confirmation, payouts, treasury, app public key, notifications, and the deployment's environment: `appEnvironment()` reads `BANKROLL_ENVIRONMENT`, which Bankroll sets to `test` on an app's test deployments, and `HSUSD_MINT` then resolves to test cash instead of BCASH, so charges and payouts need no code change. |
 | `@joinbankroll/sdk/matchmaking` | Server client for verified apps: `createTicket`, `listTickets`, `cancelTicket`. Recoverable entries, final head-to-head matches, atomic cancellation. With `BANKROLL_MOCK=1` outside production it pairs in-process instead, and a lone ticket meets a stand-in opponent after a few seconds. |
 | `@joinbankroll/sdk/next` | Server helpers for Next: `getOrigin`, `getSession` / `requireSession`, `requireIdentity`, `manifestRoute`. Server-only — importing it from a client bundle throws. Peer: `next >= 15`. |
 | `@joinbankroll/sdk/manifest` | `manifestClaims(input)`: the manifest's claims as a plain object, with no framework dependency — what `manifestRoute` serves, for tooling that builds an app's manifest before the app is deployed. |

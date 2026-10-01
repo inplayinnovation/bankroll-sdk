@@ -340,3 +340,22 @@ describe('manifestRoute', () => {
     expect(decodeManifest(await (await route()).text())).toHaveProperty('appTokens');
   });
 });
+
+describe('manifestRoute environment', () => {
+  beforeEach(() => {
+    state.host = 'app.example';
+  });
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('declares a test environment when BANKROLL_ENVIRONMENT=test, and nothing otherwise', async () => {
+    vi.stubEnv('BANKROLL_ENVIRONMENT', 'test');
+    expect(decodeManifest(await (await manifestRoute(APP)()).text()).environment).toBe('test');
+
+    vi.stubEnv('BANKROLL_ENVIRONMENT', 'live');
+    expect(decodeManifest(await (await manifestRoute(APP)()).text())).not.toHaveProperty('environment');
+
+    vi.stubEnv('BANKROLL_ENVIRONMENT', undefined);
+    expect(decodeManifest(await (await manifestRoute(APP)()).text())).not.toHaveProperty('environment');
+  });
+});

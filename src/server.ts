@@ -5,13 +5,16 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 export { appAddress } from './app-auth';
+export { APP_ENVIRONMENT, ENVIRONMENT_SETTING, appEnvironment, type AppEnvironment } from './environment';
 
 export {
   BASE_UNITS_PER_CENT,
+  BCASH_MINT,
   ChargeMismatchError,
   ConfirmChargeError,
   HSUSD_DECIMALS,
   HSUSD_MINT,
+  TEST_CASH_MINT,
   chargeMismatch,
   checkCharge,
   confirmCharge,

@@ -3,6 +3,8 @@
 // tooling builds the same claims for an app before that app is deployed,
 // so the shape lives here, once, with nothing framework-specific attached.
 
+import { APP_ENVIRONMENT, type AppEnvironment } from './environment';
+
 export interface AppToken {
   name?: string;
   description?: string;
@@ -32,6 +34,12 @@ export interface ManifestInput {
   iconDigest?: string | null | undefined;
   /** The tokens this app issues, keyed by mint address. */
   appTokens?: AppTokens | null | undefined;
+  /**
+   * Which environment this deployment is. A test environment says so, and the
+   * host then charges it in test cash. Live says nothing, so a live manifest's
+   * bytes are what they always were.
+   */
+  environment?: AppEnvironment | null | undefined;
 }
 
 export interface ManifestClaims {
@@ -39,6 +47,7 @@ export interface ManifestClaims {
   appTokens?: AppTokens;
   aud: string;
   capabilities: { session: true; payments?: string; push?: true | string };
+  environment?: typeof APP_ENVIRONMENT.test;
   iconDigest?: string;
   launch: string;
   manifestVersion: number;
@@ -67,8 +76,9 @@ function usableTokens(tokens: AppTokens): AppTokens {
 /**
  * The manifest's claims for an app. Every optional claim is omitted rather
  * than sent empty: an absent claim means something (no icon, only HSUSD
- * settles charges) that an empty one would not, and every claim is part of
- * what a user's grant is bound to.
+ * settles charges, a live environment) that an empty one would not, and
+ * every claim is part of what a user's grant is bound to. Claims are in
+ * alphabetical order, the order Bankroll signs them in.
  */
 export function manifestClaims(input: ManifestInput): ManifestClaims {
   const appTokens = usableTokens(input.appTokens ?? {});
@@ -85,6 +95,7 @@ export function manifestClaims(input: ManifestInput): ManifestClaims {
       // appear in the manifest that gets submitted for signing.
       ...(input.push ? { push: input.push } : {}),
     },
+    ...(input.environment === APP_ENVIRONMENT.test ? { environment: APP_ENVIRONMENT.test } : {}),
     ...(iconDigest ? { iconDigest } : {}),
     launch: input.launch,
     manifestVersion: MANIFEST_VERSION,
