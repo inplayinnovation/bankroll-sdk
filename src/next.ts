@@ -1,17 +1,19 @@
 // Next.js server helpers: the three things every Built-for-Bankroll app needs
 // on the server and none of which are app-specific — knowing which origin it is
 // served from, verifying the session token on a request, and serving the
-// manifest that makes it a Bankroll app.
+// manifest that makes it a Bankroll app. And one for development: the stand-in
+// host, on the page.
 //
 // Server-only. `next/headers` throws in a client bundle, so a mistake here
 // fails loudly rather than shipping the wrong thing to a browser.
 import { headers } from 'next/headers';
+import { createElement, type ReactElement } from 'react';
 
 import { appAddress } from './app-auth';
 import { BANKROLL_TOKEN_HEADER } from './constants';
 import { appEnvironment } from './environment';
 import { MANIFEST_TYP, manifestClaims, type AppTokens } from './manifest';
-import { mockEnabled, mockSession } from './mock';
+import { mockEnabled, mockHostScript, mockSession, type MockHostOptions } from './mock';
 import { verifyToken, type BankrollSession } from './server';
 
 // ---------------------------------------------------------------------------
@@ -206,4 +208,29 @@ export function manifestRoute(app: ManifestApp): (request?: Request) => Promise<
       headers: { 'content-type': CONTENT_TYPE },
     });
   };
+}
+
+// ---------------------------------------------------------------------------
+// The stand-in host, on the page
+// ---------------------------------------------------------------------------
+
+/**
+ * The stand-in host for a browser. Render it in the layout the app's pages
+ * share, and with BANKROLL_MOCK=1 outside production the page gets the
+ * `window.bankroll` the Bankroll app would have injected: the app runs in any
+ * browser as a pretend user, and in a simulator, which is told each call.
+ *
+ *   <MockHost payee={payeeAddress() ?? ''} />
+ *
+ * It yields to a host that is already there, so a test that injects its own
+ * with `mockHostScript` keeps it. A production build renders nothing:
+ * `mockEnabled()` is false there.
+ */
+export function MockHost(options: MockHostOptions): ReactElement | null {
+  if (!mockEnabled()) return null;
+  // Inline, so it has run before any of the page's own scripts ask for the
+  // host. "</" is escaped because the options are the app's own strings, and
+  // one that closed the tag would end the script early.
+  const script = `if (!window.bankroll) { ${mockHostScript(options)} }`.replace(/<\//g, '<\\/');
+  return createElement('script', { dangerouslySetInnerHTML: { __html: script } });
 }

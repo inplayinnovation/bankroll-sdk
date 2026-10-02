@@ -10,10 +10,12 @@ import {
   mockEnabled,
   mockHostScript,
   MOCK_BLOCKHASH,
+  MOCK_REFERENCE_PREFIX,
   mockPayoutSigner,
   mockSession,
   mockToken,
   parseMockSignature,
+  SIMULATOR_CHANNEL,
 } from '../src/mock';
 import { getSession } from '../src/next';
 import { buildPayout, confirmPayout } from '../src/payouts';
@@ -27,9 +29,10 @@ const decode = (segment: string) => JSON.parse(Buffer.from(segment, 'base64url')
 
 const PAYEE = 'uhpn1gHscLtCv1vkLSjYNNFXpZyJnGz1ynXWM9WaD7X';
 
+type Host = Record<string, (input?: unknown) => Promise<unknown>>;
+
 // Runs the browser script against a bare object standing in for window.
-function hostFrom(script: string) {
-  const fakeWindow: { bankroll?: Record<string, (input?: unknown) => Promise<unknown>> } = {};
+function hostFrom(script: string, fakeWindow: { bankroll?: Host } = {}) {
   new Function('window', 'btoa', 'unescape', 'encodeURIComponent', script)(
     fakeWindow,
     (value: string) => Buffer.from(value, 'binary').toString('base64'),
@@ -38,6 +41,22 @@ function hostFrom(script: string) {
   );
   if (!fakeWindow.bankroll) throw new Error('script did not define window.bankroll');
   return fakeWindow.bankroll;
+}
+
+// The same in a frame: a parent that records what it is posted, and a way to
+// deliver a message as that parent, or as someone else.
+function framedHost(script: string) {
+  const posts: { message: Record<string, unknown>; to: string }[] = [];
+  const parent = { postMessage: (message: Record<string, unknown>, to: string) => posts.push({ message, to }) };
+  let listener: (event: { source: unknown; origin: string; data: unknown }) => void = () => {};
+  const host = hostFrom(script, {
+    parent,
+    addEventListener: (_type: string, handler: typeof listener) => {
+      listener = handler;
+    },
+  } as { bankroll?: Host });
+  const hear = (origin: string, data: unknown, source: unknown = parent) => listener({ source, origin, data });
+  return { host, posts, hear };
 }
 
 const originalEnv = { NODE_ENV: process.env.NODE_ENV, BANKROLL_MOCK: process.env.BANKROLL_MOCK };
@@ -228,5 +247,84 @@ describe('mockHostScript', () => {
     expect(await host.requestAmount!()).toEqual({ status: 'dismissed' });
     expect(await host.haptics!({ type: 'light' })).toBeUndefined();
     expect(await host.promptReview!()).toBeUndefined();
+  });
+});
+
+describe('mockHostScript and a simulator', () => {
+  const HELLO = { bankroll: SIMULATOR_CHANNEL, type: 'hello' };
+  const SIMULATOR = 'http://localhost:4100';
+
+  // A test, a plain tab and a phone all run the app as the top window.
+  it('says nothing outside a frame', async () => {
+    const posts: unknown[] = [];
+    const top: Record<string, unknown> = { postMessage: (message: unknown) => posts.push(message) };
+    top.parent = top;
+    const host = hostFrom(mockHostScript({ payee: PAYEE }), top as { bankroll?: Host });
+    await host.balances!();
+    expect(posts).toEqual([]);
+  });
+
+  it('says only that it is there, until a page on this computer says hello', async () => {
+    const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
+    expect(posts).toEqual([{ message: { bankroll: SIMULATOR_CHANNEL, type: 'ready', version: '4' }, to: '*' }]);
+
+    await host.session!();
+    // Somebody else's page framing the app, and a local page that is not the parent.
+    hear('https://simulator.example', HELLO);
+    hear(SIMULATOR, HELLO, {});
+    // The right page, saying something else.
+    hear(SIMULATOR, { bankroll: SIMULATOR_CHANNEL, type: 'call' });
+    expect(posts).toHaveLength(1);
+  });
+
+  it('tells a simulator every call, starting with the ones it missed', async () => {
+    const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE, cashCents: 500 }));
+    await host.balances!();
+    hear(SIMULATOR, HELLO);
+    await host.haptics!({ type: 'light' });
+
+    const told = posts.slice(1);
+    expect(told.map((post) => post.to)).toEqual([SIMULATOR, SIMULATOR, SIMULATOR, SIMULATOR]);
+    expect(told.map((post) => post.message)).toMatchObject([
+      { bankroll: SIMULATOR_CHANNEL, type: 'call', id: 1, method: 'balances' },
+      { type: 'result', id: 1, method: 'balances', ok: true, value: { cashCents: 500, creditsCents: 0, tokens: {} } },
+      { type: 'call', id: 2, method: 'haptics', input: { type: 'light' } },
+      { type: 'result', id: 2, method: 'haptics', ok: true },
+    ]);
+    expect(told[0]!.message.at).toEqual(expect.any(Number));
+    expect(told[1]!.message.ms).toEqual(expect.any(Number));
+  });
+
+  it('takes hello from any local address, and from nowhere else', async () => {
+    for (const origin of ['http://127.0.0.1:4100', 'http://[::1]:4100', 'http://simulator.localhost:4100', 'https://localhost']) {
+      const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
+      hear(origin, HELLO);
+      await host.deposit!();
+      expect(posts.at(-1)?.to).toBe(origin);
+    }
+    for (const origin of ['https://localhost.example', 'http://localhost:4100.example', 'https://example.com', 'null']) {
+      const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
+      hear(origin, HELLO);
+      await host.deposit!();
+      expect(posts).toHaveLength(1);
+    }
+  });
+
+  it('tells a call that failed as one, and still fails it', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw new Error('offline');
+    });
+    const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
+    hear(SIMULATOR, HELLO);
+    await expect(host.pay!({ amountCents: 100, reference: `${MOCK_REFERENCE_PREFIX}one` })).rejects.toThrow('offline');
+    expect(posts.at(-1)?.message).toMatchObject({ type: 'result', method: 'pay', ok: false, error: 'offline' });
+  });
+
+  it('stops keeping calls for a simulator that never comes', async () => {
+    const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
+    for (let call = 0; call < 150; call++) await host.balances!();
+    hear(SIMULATOR, HELLO);
+    // 200 messages are kept, two to a call; the ready before them makes 201.
+    expect(posts).toHaveLength(201);
   });
 });

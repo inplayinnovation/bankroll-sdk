@@ -13,6 +13,10 @@ import type { Json } from './matchmaking';
 //                     too: createMatchmaking pairs in this process instead of
 //                     calling Bankroll (src/matchmaking-mock.ts).
 //
+// The browser half also talks to a simulator: a page on the developer's own
+// computer that frames the app and shows what it asks of its host. See "The
+// simulator" below.
+//
 // The server half is honoured ONLY when BANKROLL_MOCK=1 and NODE_ENV is not
 // production. A production build never reads the flag, so a token or
 // signature from this file is worthless against a deployment.
@@ -321,6 +325,39 @@ export function armMockExpiry(reference: string, expiresAt: string): void {
 // The browser half
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// The simulator
+// ---------------------------------------------------------------------------
+//
+// A simulator is a page that frames the app on the developer's own computer
+// and shows every call the app makes to its host. It is another origin, so it
+// can see nothing of the app's page: the stand-in host tells it, in window
+// messages, and only once a local page has asked.
+//
+//   host      -> parent   ready    to any parent: says a stand-in host is here
+//   simulator -> host     hello    the answer, and the request to be told
+//   host      -> simulator call    a call began: its method and its input
+//   host      -> simulator result  the same call ended: its value, or its error
+//
+// What happened before hello is kept and sent with it, so a simulator that
+// loads after the app misses nothing. Outside a frame nothing is sent at all,
+// which is where a test, a plain browser tab and a phone all run the app.
+
+/** What marks a window message as one of these. */
+export const SIMULATOR_CHANNEL = 'simulator';
+// Calls made before a simulator says hello, kept for it. A page nobody is
+// simulating stops keeping them here.
+const SIMULATOR_UNSENT_LIMIT = 200;
+
+/** The messages a stand-in host and a simulator exchange. */
+export type SimulatorMessage = { bankroll: typeof SIMULATOR_CHANNEL } & (
+  | { type: 'ready'; version: string }
+  | { type: 'hello' }
+  | { type: 'call'; id: number; method: string; input?: Json; at: number }
+  | { type: 'result'; id: number; method: string; ok: true; value?: Json; ms: number }
+  | { type: 'result'; id: number; method: string; ok: false; error: string; ms: number }
+);
+
 /**
  * JavaScript that defines `window.bankroll` as the Bankroll app would, with
  * every call succeeding at once. Run it before the page's own scripts:
@@ -330,6 +367,8 @@ export function armMockExpiry(reference: string, expiresAt: string): void {
  * `payee` is the address the app's manifest declares; read it from
  * `/.well-known/bankroll.jwt` so the server's payee check exercises the real
  * value.
+ *
+ * In a Next app, `MockHost` from `@joinbankroll/sdk/next` puts this on the page.
  */
 export function mockHostScript(options: MockHostOptions): string {
   const token = mockToken(options);
@@ -347,6 +386,8 @@ export function mockHostScript(options: MockHostOptions): string {
     referencePrefix: MOCK_REFERENCE_PREFIX,
     webhookPath: MOCK_WEBHOOK_PATH,
     confirmedEvent: MOCK_EVENT_CONFIRMED,
+    channel: SIMULATOR_CHANNEL,
+    unsentLimit: SIMULATOR_UNSENT_LIMIT,
   });
   return `(() => {
   const config = ${config};
@@ -355,8 +396,55 @@ export function mockHostScript(options: MockHostOptions): string {
       .replace(/\\+/g, '-')
       .replace(/\\//g, '_')
       .replace(/=+$/, '');
-  window.bankroll = {
-    version: config.version,
+  // The simulator, if this page is framed by one. Only a page on this
+  // computer is ever told anything: the origin that says hello is checked,
+  // and every message after it is addressed to that origin alone.
+  const frame = window.parent && window.parent !== window ? window.parent : null;
+  const local = /^https?:\\/\\/(localhost|127\\.0\\.0\\.1|\\[::1\\]|[a-z0-9-]+\\.localhost)(:\\d+)?$/;
+  const unsent = [];
+  let simulator = null;
+  // A message crosses to another page as a copy, and only plain data copies.
+  const plain = (value) => {
+    if (value === undefined) return undefined;
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch {
+      return String(value);
+    }
+  };
+  const tell = (message) => {
+    if (!frame) return;
+    const packet = Object.assign({ bankroll: config.channel }, message);
+    if (simulator) frame.postMessage(packet, simulator);
+    else if (unsent.length < config.unsentLimit) unsent.push(packet);
+  };
+  if (frame) {
+    window.addEventListener('message', (event) => {
+      const data = event.data;
+      if (event.source !== frame || !data || data.bankroll !== config.channel || data.type !== 'hello') return;
+      if (!local.test(event.origin)) return;
+      simulator = event.origin;
+      while (unsent.length) frame.postMessage(unsent.shift(), simulator);
+    });
+    // To any parent, because its origin is not known yet: this says a
+    // stand-in host is here, and nothing else.
+    frame.postMessage({ bankroll: config.channel, type: 'ready', version: config.version }, '*');
+  }
+  let calls = 0;
+  const told = (method, answer) => async (input) => {
+    const id = ++calls;
+    const began = Date.now();
+    tell({ type: 'call', id, method, input: plain(input), at: began });
+    try {
+      const value = await answer(input);
+      tell({ type: 'result', id, method, ok: true, value: plain(value), ms: Date.now() - began });
+      return value;
+    } catch (error) {
+      tell({ type: 'result', id, method, ok: false, error: String((error && error.message) || error), ms: Date.now() - began });
+      throw error;
+    }
+  };
+  const host = {
     session: async () => config.token,
     identity: async () => config.token,
     pay: async (input) => {
@@ -392,6 +480,8 @@ export function mockHostScript(options: MockHostOptions): string {
     quote: async () => undefined,
     requestAmount: async () => ({ status: 'dismissed' }),
   };
+  window.bankroll = { version: config.version };
+  for (const method of Object.keys(host)) window.bankroll[method] = told(method, host[method]);
 })();`;
 }
 
