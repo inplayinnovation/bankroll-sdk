@@ -64,14 +64,15 @@ export function useBankrollChecked(): boolean {
 /**
  * Send the user through identity verification — real money moves only for a
  * verified person. Resolves true once verified, false if they declined or the
- * host refused. Anything that is not a host rejection propagates.
+ * host refused. Anything that is not a host rejection propagates, and so does
+ * a call made before bankroll.init(): that is the app's mistake to hear about.
  */
 export async function verifyIdentity(): Promise<boolean> {
   try {
     await bankroll.session({ identity: true });
     return true;
   } catch (error) {
-    if (error instanceof BankrollError) return false;
+    if (error instanceof BankrollError && error.code !== 'not_initialized') return false;
     throw error;
   }
 }

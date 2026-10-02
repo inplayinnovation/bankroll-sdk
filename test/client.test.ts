@@ -1,16 +1,22 @@
 // @vitest-environment happy-dom
 
+import { readFileSync } from 'node:fs';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// The module carries state (token cache + single-flight). Reset the registry
-// and re-import for a clean module per test.
-async function load() {
+// The module carries state (init, token cache + single-flight). Reset the
+// registry and re-import for a clean module per test, started the way an app
+// starts it: init() first. `started: false` leaves init() uncalled.
+async function load({ started = true }: { started?: boolean } = {}) {
   vi.resetModules();
-  return import('../src/index');
+  const module = await import('../src/index');
+  if (started) void module.bankroll.init();
+  return module;
 }
 
 type BridgeShape = {
   version: string;
+  init?: unknown;
   session?: unknown;
   identity?: unknown;
   pay?: unknown;
@@ -56,6 +62,125 @@ beforeEach(() => {
 afterEach(() => {
   clearHost();
   vi.restoreAllMocks();
+});
+
+describe('init', () => {
+  const { version } = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string };
+
+  it('is required: every call but status() fails until it has been called', async () => {
+    const bridge = {
+      version: '4',
+      session: vi.fn().mockResolvedValue(freshToken()),
+      pay: vi.fn().mockResolvedValue('signature'),
+      balances: vi.fn(),
+      deposit: vi.fn(),
+      haptics: vi.fn(),
+      promptReview: vi.fn(),
+    };
+    setBridge(bridge);
+    const { bankroll, BankrollError } = await load({ started: false });
+    expect(bankroll.status()).toBe('ready');
+
+    const calls = [
+      () => bankroll.session(),
+      () => bankroll.identity(),
+      () => bankroll.charge({ amountCents: 100 }),
+      () => bankroll.balances(),
+      () => bankroll.deposit(),
+      () => bankroll.haptics({ type: 'light' }),
+      () => bankroll.promptReview(),
+    ];
+    for (const call of calls) {
+      const error = await call().catch((thrown: unknown) => thrown);
+      expect(error).toBeInstanceOf(BankrollError);
+      expect((error as InstanceType<typeof BankrollError>).code).toBe('not_initialized');
+      expect((error as Error).message).toContain('bankroll.init()');
+    }
+    for (const method of [bridge.session, bridge.pay, bridge.balances, bridge.deposit, bridge.haptics, bridge.promptReview]) {
+      expect(method).not.toHaveBeenCalled();
+    }
+
+    // And from then on they work.
+    await bankroll.init();
+    await expect(bankroll.charge({ amountCents: 100 })).resolves.toBe('signature');
+  });
+
+  it('tells the host which SDK the page runs', async () => {
+    const init = vi.fn().mockResolvedValue(undefined);
+    setBridge({ version: '4', init, session: vi.fn() });
+    const { bankroll } = await load({ started: false });
+    await expect(bankroll.init()).resolves.toBeUndefined();
+    expect(init).toHaveBeenCalledTimes(1);
+    expect(init).toHaveBeenCalledWith({ sdk: version });
+    expect(version).toMatch(/^\d+\.\d+\.\d+/);
+  });
+
+  it('runs once: calling it again is the first call over again', async () => {
+    const init = vi.fn().mockResolvedValue(undefined);
+    setBridge({ version: '4', init, session: vi.fn() });
+    const { bankroll } = await load({ started: false });
+    const first = bankroll.init();
+    expect(bankroll.init()).toBe(first);
+    await first;
+    await bankroll.init({});
+    expect(init).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds a call made while it is still running, and lets it go when it is done', async () => {
+    let finish = () => {};
+    const order: string[] = [];
+    const token = freshToken();
+    setBridge({
+      version: '4',
+      init: vi.fn(() => new Promise<void>((resolve) => (finish = () => (order.push('init done'), resolve())))),
+      session: vi.fn(async () => (order.push('session'), token)),
+    });
+    const { bankroll } = await load({ started: false });
+    void bankroll.init();
+    const asked = bankroll.session();
+    // Long enough for a call that was not waiting to have gone through.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(order).toEqual([]);
+    finish();
+    await expect(asked).resolves.toBe(token);
+    expect(order).toEqual(['init done', 'session']);
+  });
+
+  it('works under a Bankroll app that has never heard of it, which is told nothing', async () => {
+    const token = freshToken();
+    setBridge({ version: '4', session: vi.fn().mockResolvedValue(token), pay: vi.fn() });
+    const { bankroll } = await load({ started: false });
+    await expect(bankroll.init()).resolves.toBeUndefined();
+    await expect(bankroll.session()).resolves.toBe(token);
+  });
+
+  it('is not stopped by a host that refuses the introduction', async () => {
+    const token = freshToken();
+    setBridge({
+      version: '4',
+      init: vi.fn().mockRejectedValue(new Error('no')),
+      session: vi.fn().mockResolvedValue(token),
+    });
+    const { bankroll } = await load({ started: false });
+    await expect(bankroll.init()).resolves.toBeUndefined();
+    await expect(bankroll.session()).resolves.toBe(token);
+  });
+
+  it('does nothing outside Bankroll, where a call still says so', async () => {
+    const { bankroll, BankrollError } = await load({ started: false });
+    await expect(bankroll.init()).resolves.toBeUndefined();
+    const error = await bankroll.session().catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(BankrollError);
+    expect((error as InstanceType<typeof BankrollError>).code).toBe('unavailable');
+  });
+
+  it('says nothing to a Bankroll app too old for this SDK', async () => {
+    const init = vi.fn();
+    setBridge({ version: '0', init });
+    const { bankroll } = await load({ started: false });
+    await bankroll.init();
+    expect(init).not.toHaveBeenCalled();
+  });
 });
 
 describe('status', () => {
@@ -554,6 +679,24 @@ describe('withBankrollToken', () => {
     const init = fetchImpl.mock.calls[0]![1] as RequestInit;
     const headers = new Headers(init?.headers);
     expect(headers.has(BANKROLL_TOKEN_HEADER)).toBe(false);
+  });
+
+  it('still sends a bare request outside Bankroll when init() was never called', async () => {
+    const { withBankrollToken, BANKROLL_TOKEN_HEADER } = await load({ started: false });
+    const fetchImpl = vi.fn().mockResolvedValue(new Response('ok'));
+    await withBankrollToken(fetchImpl as unknown as typeof fetch)('https://api.example/x');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(new Headers((fetchImpl.mock.calls[0]![1] as RequestInit)?.headers).has(BANKROLL_TOKEN_HEADER)).toBe(false);
+  });
+
+  it('inside Bankroll, fails as every call does when init() was never called', async () => {
+    setBridge({ version: '1', identity: vi.fn().mockResolvedValue(freshToken()), pay: vi.fn() });
+    const { withBankrollToken, BankrollError } = await load({ started: false });
+    const fetchImpl = vi.fn().mockResolvedValue(new Response('ok'));
+    const error = await withBankrollToken(fetchImpl as unknown as typeof fetch)('https://api.example/x').catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(BankrollError);
+    expect((error as InstanceType<typeof BankrollError>).code).toBe('not_initialized');
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('propagates consent_declined without calling fetch', async () => {

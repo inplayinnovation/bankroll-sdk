@@ -260,6 +260,7 @@ describe('mockHostScript', () => {
   it('defines the host the client SDK expects', async () => {
     const host = hostFrom(mockHostScript({ payee: PAYEE, cashCents: 500 }));
     expect(host.version).toBe('4');
+    expect(await host.init!({ sdk: '0.33.0' })).toBeUndefined();
     expect(await host.session!()).toBe(await host.identity!());
     expect(mockSession((await host.session!()) as string)?.user.username).toBe('tester');
     expect(await host.balances!()).toEqual({ cashCents: 500, creditsCents: 0, tokens: {} });
@@ -312,6 +313,16 @@ describe('mockHostScript and a simulator', () => {
     ]);
     expect(told[0]!.message.at).toEqual(expect.any(Number));
     expect(told[1]!.message.ms).toEqual(expect.any(Number));
+  });
+
+  it('tells a simulator which SDK the page said it runs', async () => {
+    const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
+    hear(SIMULATOR, HELLO);
+    await host.init!({ sdk: '0.33.0' });
+    expect(posts.slice(1).map((post) => post.message)).toMatchObject([
+      { type: 'call', id: 1, method: 'init', input: { sdk: '0.33.0' } },
+      { type: 'result', id: 1, method: 'init', ok: true },
+    ]);
   });
 
   it('takes hello from any local address, and from nowhere else', async () => {

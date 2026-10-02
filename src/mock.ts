@@ -485,6 +485,9 @@ export function mockHostScript(options: MockHostOptions): string {
     }
   };
   const host = {
+    // Where a page says which SDK it runs. A simulator hears it as it hears
+    // every call.
+    init: async () => undefined,
     session: async () => config.token,
     identity: async () => config.token,
     pay: async (input) => {
