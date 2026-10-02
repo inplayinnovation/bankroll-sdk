@@ -209,6 +209,7 @@ function requireBridge(
 // ---------------------------------------------------------------------------
 
 const INIT_METHOD = 'init';
+const SESSION_METHOD = 'session';
 
 /**
  * What an app passes to init(). There is nothing to pass yet: this is where an
@@ -257,9 +258,19 @@ function init(options?: InitOptions): Promise<void> {
 // Where every call to the host begins. A call before init() was ever called is
 // a mistake in the app, said plainly and at once. One made while init() is
 // still running waits for it.
-function started(): Promise<void> {
-  if (initialized === null) throw new BankrollError(CODE_NOT_INITIALIZED, MESSAGE_NOT_INITIALIZED);
-  return initialized;
+//
+// The host never hears a call that is refused here, and an app that catches
+// the error hears nothing either: a balance that will not load, and no reason
+// given. So a stand-in host is told, and passes it on to a simulator as a call
+// that failed. `method` is the host's name for the call.
+function started(method: string): Promise<void> {
+  if (initialized !== null) return initialized;
+  try {
+    if (typeof window !== 'undefined') window.bankroll?.refused?.(method, MESSAGE_NOT_INITIALIZED);
+  } catch {
+    // Telling is a courtesy. The refusal below is the point.
+  }
+  throw new BankrollError(CODE_NOT_INITIALIZED, MESSAGE_NOT_INITIALIZED);
 }
 
 // ---------------------------------------------------------------------------
@@ -349,7 +360,7 @@ export type SessionOptions = { identity?: boolean };
 // Cached and single-flighted; a fresh token is reused, and an identity-required
 // request reuses the cache only when the cached token is itself verified.
 async function session(options?: SessionOptions): Promise<string> {
-  await started();
+  await started(SESSION_METHOD);
   const identity = options?.identity === true;
   const call = resolveTokenCall(identity);
   if (
@@ -461,7 +472,7 @@ interface BridgePayload {
 // signature, which your server confirms with confirmCharge() before releasing
 // value.
 async function charge(input: ChargeInput): Promise<string> {
-  await started();
+  await started(PAY_METHOD);
   const bridge = requireBridge(PAY_METHOD);
   const { amountCents } = input;
   // Validate before the bridge, using the host's own wire message so a local
@@ -550,7 +561,7 @@ export type Balances = {
  * at client version 2+; older hosts reject with 'update_required'.
  */
 async function deposit(input?: DepositInput): Promise<void> {
-  await started();
+  await started(DEPOSIT_METHOD);
   const bridge = requireBridge(DEPOSIT_METHOD);
   try {
     return await bridge.deposit!(input);
@@ -567,7 +578,7 @@ async function deposit(input?: DepositInput): Promise<void> {
  * at client version 2+; older hosts reject with 'update_required'.
  */
 async function balances(): Promise<Balances> {
-  await started();
+  await started(BALANCES_METHOD);
   const bridge = requireBridge(BALANCES_METHOD);
   try {
     return await bridge.balances!();
@@ -609,7 +620,7 @@ export type HapticsInput = {
  * the moments that deserve weight; never gate anything on it.
  */
 async function haptics(input?: HapticsInput): Promise<void> {
-  await started();
+  await started(HAPTICS_METHOD);
   if (status() !== STATUS_READY) return;
   const host = window.bankroll;
   if (!host || typeof host[HAPTICS_METHOD] !== 'function') return;
@@ -641,7 +652,7 @@ const PROMPT_REVIEW_METHOD = 'promptReview';
  * same silent resolve.
  */
 async function promptReview(): Promise<void> {
-  await started();
+  await started(PROMPT_REVIEW_METHOD);
   if (status() !== STATUS_READY) return;
   const host = window.bankroll;
   if (!host || typeof host[PROMPT_REVIEW_METHOD] !== 'function') return;
@@ -724,6 +735,9 @@ declare global {
       // A host that has it is told which SDK the page runs; feature-detected,
       // since no Bankroll app before init() has it.
       init?(input: { sdk: string }): Promise<void>;
+      // The stand-in host only: where this SDK says a call it refused before
+      // asking, for a simulator to show.
+      refused?(method: string, reason: string): void;
       // The newer host method; older hosts expose only identity(). The SDK
       // feature-detects both.
       session?(options?: { identity?: boolean }): Promise<string>;

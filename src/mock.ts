@@ -525,6 +525,13 @@ export function mockHostScript(options: MockHostOptions): string {
   };
   window.bankroll = { version: config.version };
   for (const method of Object.keys(host)) window.bankroll[method] = told(method, host[method]);
+  // A call the SDK refused before it asked, one made before init(): nothing
+  // else of it would be heard. A simulator is told it as a call that failed.
+  window.bankroll.refused = (method, reason) => {
+    const id = ++calls;
+    tell({ type: 'call', id, method: String(method), at: Date.now() });
+    tell({ type: 'result', id, method: String(method), ok: false, error: String(reason), ms: 0 });
+  };
 })();`;
 }
 

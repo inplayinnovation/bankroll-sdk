@@ -17,9 +17,12 @@ async function load({ started = true }: { started?: boolean } = {}) {
 type BridgeShape = {
   version: string;
   init?: unknown;
+  refused?: unknown;
   session?: unknown;
   identity?: unknown;
   pay?: unknown;
+  balances?: unknown;
+  deposit?: unknown;
   haptics?: unknown;
   promptReview?: unknown;
 };
@@ -103,6 +106,34 @@ describe('init', () => {
     // And from then on they work.
     await bankroll.init();
     await expect(bankroll.charge({ amountCents: 100 })).resolves.toBe('signature');
+  });
+
+  it('tells a stand-in host each call it refuses, by the host\'s name for it', async () => {
+    const refused = vi.fn();
+    setBridge({ version: '4', refused, session: vi.fn(), pay: vi.fn(), balances: vi.fn() });
+    const { bankroll } = await load({ started: false });
+    await bankroll.balances().catch(() => {});
+    await bankroll.charge({ amountCents: 100 }).catch(() => {});
+    await bankroll.identity().catch(() => {});
+    expect(refused.mock.calls.map(([method]) => method)).toEqual(['balances', 'pay', 'session']);
+    expect(refused.mock.calls[0]![1]).toContain('bankroll.init()');
+
+    // Once started there is nothing to refuse.
+    await bankroll.init();
+    await bankroll.balances();
+    expect(refused).toHaveBeenCalledTimes(3);
+  });
+
+  it('refuses all the same when the host cannot be told, or fails at it', async () => {
+    setBridge({
+      version: '4',
+      refused: () => {
+        throw new Error('broken');
+      },
+      balances: vi.fn(),
+    });
+    const { bankroll } = await load({ started: false });
+    await expect(bankroll.balances()).rejects.toMatchObject({ code: 'not_initialized' });
   });
 
   it('tells the host which SDK the page runs', async () => {

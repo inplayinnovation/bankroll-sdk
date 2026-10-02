@@ -325,6 +325,16 @@ describe('mockHostScript and a simulator', () => {
     ]);
   });
 
+  it('tells a simulator a call the SDK refused, as one that failed', async () => {
+    const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
+    hear(SIMULATOR, HELLO);
+    (host.refused as unknown as (method: string, reason: string) => void)('balances', 'bankroll.init() has not been called.');
+    expect(posts.slice(1).map((post) => post.message)).toMatchObject([
+      { type: 'call', id: 1, method: 'balances' },
+      { type: 'result', id: 1, method: 'balances', ok: false, error: 'bankroll.init() has not been called.' },
+    ]);
+  });
+
   it('takes hello from any local address, and from nowhere else', async () => {
     for (const origin of ['http://127.0.0.1:4100', 'http://[::1]:4100', 'http://simulator.localhost:4100', 'https://localhost']) {
       const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
