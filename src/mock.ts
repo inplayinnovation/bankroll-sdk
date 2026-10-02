@@ -335,24 +335,49 @@ export function armMockExpiry(reference: string, expiresAt: string): void {
 // messages, and only once a local page has asked.
 //
 //   host      -> parent   ready    to any parent: says a stand-in host is here
-//   simulator -> host     hello    the answer, and the request to be told
+//   simulator -> host     hello    the answer, and the request to be told;
+//                                  with it, the safe area of the phone it draws
 //   host      -> simulator call    a call began: its method and its input
 //   host      -> simulator result  the same call ended: its value, or its error
 //
 // What happened before hello is kept and sent with it, so a simulator that
 // loads after the app misses nothing. Outside a frame nothing is sent at all,
 // which is where a test, a plain browser tab and a phone all run the app.
+//
+// The safe area. A simulator draws a phone around the page: a status bar
+// across the top, a home indicator across the bottom. On a phone the page
+// learns how much room those take from env(safe-area-inset-*). A browser on a
+// computer answers zero, and nothing outside the page can change that. So a
+// simulator says it in hello, and the stand-in host puts it on the page's root
+// element, as --bankroll-safe-area-inset-top, -right, -bottom and -left, for
+// the page's CSS to prefer to the phone's own:
+//
+//   padding-top: var(--bankroll-safe-area-inset-top, env(safe-area-inset-top));
+//
+// Said again, it replaces what was said before: the simulator shows another
+// phone. Everywhere else the variables are not set, and the phone's own value
+// is the one used.
 
 /** What marks a window message as one of these. */
 export const SIMULATOR_CHANNEL = 'simulator';
 // Calls made before a simulator says hello, kept for it. A page nobody is
 // simulating stops keeping them here.
 const SIMULATOR_UNSENT_LIMIT = 200;
+// The CSS variables a simulated phone's safe area is put in: this, then the side.
+const SAFE_AREA_VARIABLE = '--bankroll-safe-area-inset-';
+
+/** How far a phone's status bar, home indicator and corners reach into its screen from each edge, in CSS pixels. */
+export interface SafeAreaInsets {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
 
 /** The messages a stand-in host and a simulator exchange. */
 export type SimulatorMessage = { bankroll: typeof SIMULATOR_CHANNEL } & (
   | { type: 'ready'; version: string }
-  | { type: 'hello' }
+  | { type: 'hello'; safeArea?: SafeAreaInsets }
   | { type: 'call'; id: number; method: string; input?: Json; at: number }
   | { type: 'result'; id: number; method: string; ok: true; value?: Json; ms: number }
   | { type: 'result'; id: number; method: string; ok: false; error: string; ms: number }
@@ -388,6 +413,7 @@ export function mockHostScript(options: MockHostOptions): string {
     confirmedEvent: MOCK_EVENT_CONFIRMED,
     channel: SIMULATOR_CHANNEL,
     unsentLimit: SIMULATOR_UNSENT_LIMIT,
+    safeAreaVariable: SAFE_AREA_VARIABLE,
   });
   return `(() => {
   const config = ${config};
@@ -418,12 +444,26 @@ export function mockHostScript(options: MockHostOptions): string {
     if (simulator) frame.postMessage(packet, simulator);
     else if (unsent.length < config.unsentLimit) unsent.push(packet);
   };
+  // The simulated phone's safe area, where the page's CSS can read it: in a
+  // stylesheet of this script's own. Written on the root element they would be
+  // attributes the page's framework never rendered, and React says so when it
+  // hydrates. Each side is a length and nothing else, whatever was sent.
+  let safeAreaSheet = null;
+  const showSafeArea = (insets) => {
+    const page = window.document;
+    if (!insets || typeof insets !== 'object' || !page || !page.adoptedStyleSheets || !window.CSSStyleSheet) return;
+    const sides = ['top', 'right', 'bottom', 'left'].filter((side) => typeof insets[side] === 'number' && insets[side] >= 0 && insets[side] < Infinity);
+    if (!safeAreaSheet) safeAreaSheet = new window.CSSStyleSheet();
+    safeAreaSheet.replaceSync(':root{' + sides.map((side) => config.safeAreaVariable + side + ':' + insets[side] + 'px').join(';') + '}');
+    if (!page.adoptedStyleSheets.includes(safeAreaSheet)) page.adoptedStyleSheets = [...page.adoptedStyleSheets, safeAreaSheet];
+  };
   if (frame) {
     window.addEventListener('message', (event) => {
       const data = event.data;
       if (event.source !== frame || !data || data.bankroll !== config.channel || data.type !== 'hello') return;
       if (!local.test(event.origin)) return;
       simulator = event.origin;
+      showSafeArea(data.safeArea);
       while (unsent.length) frame.postMessage(unsent.shift(), simulator);
     });
     // To any parent, because its origin is not known yet: this says a

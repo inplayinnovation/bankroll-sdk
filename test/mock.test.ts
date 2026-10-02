@@ -44,12 +44,14 @@ function hostFrom(script: string, fakeWindow: { bankroll?: Host } = {}) {
 }
 
 // The same in a frame: a parent that records what it is posted, and a way to
-// deliver a message as that parent, or as someone else.
-function framedHost(script: string) {
+// deliver a message as that parent, or as someone else. `page` is whatever
+// else the window has, such as a document.
+function framedHost(script: string, page: Record<string, unknown> = {}) {
   const posts: { message: Record<string, unknown>; to: string }[] = [];
   const parent = { postMessage: (message: Record<string, unknown>, to: string) => posts.push({ message, to }) };
   let listener: (event: { source: unknown; origin: string; data: unknown }) => void = () => {};
   const host = hostFrom(script, {
+    ...page,
     parent,
     addEventListener: (_type: string, handler: typeof listener) => {
       listener = handler;
@@ -57,6 +59,23 @@ function framedHost(script: string) {
   } as { bankroll?: Host });
   const hear = (origin: string, data: unknown, source: unknown = parent) => listener({ source, origin, data });
   return { host, posts, hear };
+}
+
+// As much of a page's stylesheets as the script uses: a document that adopts
+// them, and a sheet that keeps the text it was last given.
+function stylesheets() {
+  const made: { text: string }[] = [];
+  class CSSStyleSheet {
+    text = '';
+    constructor() {
+      made.push(this);
+    }
+    replaceSync(text: string) {
+      this.text = text;
+    }
+  }
+  const document = { adoptedStyleSheets: [] as unknown[] };
+  return { made, document, page: { document, CSSStyleSheet } };
 }
 
 const originalEnv = { NODE_ENV: process.env.NODE_ENV, BANKROLL_MOCK: process.env.BANKROLL_MOCK };
@@ -326,5 +345,78 @@ describe('mockHostScript and a simulator', () => {
     hear(SIMULATOR, HELLO);
     // 200 messages are kept, two to a call; the ready before them makes 201.
     expect(posts).toHaveLength(201);
+  });
+});
+
+describe('mockHostScript and the safe area of a simulated phone', () => {
+  const HELLO = { bankroll: SIMULATOR_CHANNEL, type: 'hello' };
+  const SIMULATOR = 'http://localhost:4100';
+  const PHONE = { top: 62, right: 0, bottom: 34, left: 0 };
+
+  it('puts it where the page\'s CSS can read it, in a stylesheet of its own', () => {
+    const { made, document, page } = stylesheets();
+    const { hear } = framedHost(mockHostScript({ payee: PAYEE }), page);
+    expect(document.adoptedStyleSheets).toEqual([]);
+
+    hear(SIMULATOR, { ...HELLO, safeArea: PHONE });
+    expect(document.adoptedStyleSheets).toEqual([made[0]]);
+    expect(made[0]!.text).toBe(
+      ':root{--bankroll-safe-area-inset-top:62px;--bankroll-safe-area-inset-right:0px;--bankroll-safe-area-inset-bottom:34px;--bankroll-safe-area-inset-left:0px}',
+    );
+  });
+
+  it('takes another phone in place of the last, in the same stylesheet', () => {
+    const { made, document, page } = stylesheets();
+    const { hear } = framedHost(mockHostScript({ payee: PAYEE }), page);
+    hear(SIMULATOR, { ...HELLO, safeArea: PHONE });
+    hear(SIMULATOR, { ...HELLO, safeArea: { ...PHONE, top: 47 } });
+    expect(made).toHaveLength(1);
+    expect(document.adoptedStyleSheets).toHaveLength(1);
+    expect(made[0]!.text).toContain('--bankroll-safe-area-inset-top:47px');
+    expect(made[0]!.text).not.toContain('62px');
+
+    // A hello that says nothing of a phone leaves the last one standing.
+    hear(SIMULATOR, HELLO);
+    expect(made[0]!.text).toContain('--bankroll-safe-area-inset-top:47px');
+  });
+
+  it('keeps its stylesheet beside the page\'s own, and puts it back if the page drops it', () => {
+    const { made, document, page } = stylesheets();
+    const theirs = { text: 'the page\'s own' };
+    document.adoptedStyleSheets = [theirs];
+    const { hear } = framedHost(mockHostScript({ payee: PAYEE }), page);
+    hear(SIMULATOR, { ...HELLO, safeArea: PHONE });
+    expect(document.adoptedStyleSheets).toEqual([theirs, made[0]]);
+
+    document.adoptedStyleSheets = [];
+    hear(SIMULATOR, { ...HELLO, safeArea: PHONE });
+    expect(document.adoptedStyleSheets).toEqual([made[0]]);
+  });
+
+  it('takes it only with a hello it takes, and only as lengths', () => {
+    // Somebody else's page framing the app, and a local page that is not the parent.
+    const refused = stylesheets();
+    const stranger = framedHost(mockHostScript({ payee: PAYEE }), refused.page);
+    stranger.hear('https://simulator.example', { ...HELLO, safeArea: PHONE });
+    stranger.hear(SIMULATOR, { ...HELLO, safeArea: PHONE }, {});
+    expect(refused.made).toEqual([]);
+    expect(refused.document.adoptedStyleSheets).toEqual([]);
+
+    // Anything that is not a length from an edge is left out: it would be CSS of the sender's choosing.
+    const { made, page } = stylesheets();
+    const { hear } = framedHost(mockHostScript({ payee: PAYEE }), page);
+    hear(SIMULATOR, { ...HELLO, safeArea: { top: '62px;color:red', right: -1, bottom: Infinity, left: 3.5 } });
+    expect(made[0]!.text).toBe(':root{--bankroll-safe-area-inset-left:3.5px}');
+    hear(SIMULATOR, { ...HELLO, safeArea: { top: Number.NaN } });
+    expect(made[0]!.text).toBe(':root{}');
+    hear(SIMULATOR, { ...HELLO, safeArea: 'tall' });
+    expect(made[0]!.text).toBe(':root{}');
+  });
+
+  it('still tells its calls where a page cannot adopt a stylesheet', async () => {
+    const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
+    hear(SIMULATOR, { ...HELLO, safeArea: PHONE });
+    await host.deposit!();
+    expect(posts.at(-1)?.message).toMatchObject({ type: 'result', method: 'deposit', ok: true });
   });
 });
