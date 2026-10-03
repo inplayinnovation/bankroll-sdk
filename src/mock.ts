@@ -325,63 +325,11 @@ export function armMockExpiry(reference: string, expiresAt: string): void {
 // The browser half
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// The simulator
-// ---------------------------------------------------------------------------
-//
-// A simulator is a page that frames the app on the developer's own computer
-// and shows every call the app makes to its host. It is another origin, so it
-// can see nothing of the app's page: the stand-in host tells it, in window
-// messages, and only once a local page has asked.
-//
-//   host      -> parent   ready    to any parent: says a stand-in host is here
-//   simulator -> host     hello    the answer, and the request to be told;
-//                                  with it, the safe area of the phone it draws
-//   host      -> simulator call    a call began: its method and its input
-//   host      -> simulator result  the same call ended: its value, or its error
-//
-// What happened before hello is kept and sent with it, so a simulator that
-// loads after the app misses nothing. Outside a frame nothing is sent at all,
-// which is where a test, a plain browser tab and a phone all run the app.
-//
-// The safe area. A simulator draws a phone around the page: a status bar
-// across the top, a home indicator across the bottom. On a phone the page
-// learns how much room those take from env(safe-area-inset-*). A browser on a
-// computer answers zero, and nothing outside the page can change that. So a
-// simulator says it in hello, and the stand-in host puts it on the page's root
-// element, as --bankroll-safe-area-inset-top, -right, -bottom and -left, for
-// the page's CSS to prefer to the phone's own:
-//
-//   padding-top: var(--bankroll-safe-area-inset-top, env(safe-area-inset-top));
-//
-// Said again, it replaces what was said before: the simulator shows another
-// phone. Everywhere else the variables are not set, and the phone's own value
-// is the one used.
-
-/** What marks a window message as one of these. */
-export const SIMULATOR_CHANNEL = 'simulator';
-// Calls made before a simulator says hello, kept for it. A page nobody is
-// simulating stops keeping them here.
-const SIMULATOR_UNSENT_LIMIT = 200;
-// The CSS variables a simulated phone's safe area is put in: this, then the side.
-const SAFE_AREA_VARIABLE = '--bankroll-safe-area-inset-';
-
-/** How far a phone's status bar, home indicator and corners reach into its screen from each edge, in CSS pixels. */
-export interface SafeAreaInsets {
-  top: number;
-  right: number;
-  bottom: number;
-  left: number;
-}
-
-/** The messages a stand-in host and a simulator exchange. */
-export type SimulatorMessage = { bankroll: typeof SIMULATOR_CHANNEL } & (
-  | { type: 'ready'; version: string }
-  | { type: 'hello'; safeArea?: SafeAreaInsets }
-  | { type: 'call'; id: number; method: string; input?: Json; at: number }
-  | { type: 'result'; id: number; method: string; ok: true; value?: Json; ms: number }
-  | { type: 'result'; id: number; method: string; ok: false; error: string; ms: number }
-);
+// A test's stand-in host, as the Bankroll app would be. In a simulator the
+// SDK's own bridge is the host (./bridge), and this steps aside: a page framed
+// by a page on this computer gets no stand-in, so the bridge takes its place
+// and the simulator answers, as a person of the developer's choosing.
+export { SIMULATOR_CHANNEL, type SafeAreaInsets, type SimulatorMessage } from './bridge';
 
 /**
  * JavaScript that defines `window.bankroll` as the Bankroll app would, with
@@ -394,6 +342,7 @@ export type SimulatorMessage = { bankroll: typeof SIMULATOR_CHANNEL } & (
  * value.
  *
  * In a Next app, `MockHost` from `@joinbankroll/sdk/next` puts this on the page.
+ * In a simulator it does nothing, and the SDK's bridge is the host instead.
  */
 export function mockHostScript(options: MockHostOptions): string {
   const token = mockToken(options);
@@ -411,82 +360,34 @@ export function mockHostScript(options: MockHostOptions): string {
     referencePrefix: MOCK_REFERENCE_PREFIX,
     webhookPath: MOCK_WEBHOOK_PATH,
     confirmedEvent: MOCK_EVENT_CONFIRMED,
-    channel: SIMULATOR_CHANNEL,
-    unsentLimit: SIMULATOR_UNSENT_LIMIT,
-    safeAreaVariable: SAFE_AREA_VARIABLE,
   });
   return `(() => {
   const config = ${config};
+  // Framed by a page on this computer: a simulator, whose host is the SDK's
+  // bridge. The browser says who the parent is where it can; where it cannot,
+  // the page that opened this one is the next best word.
+  const parent = window.parent && window.parent !== window ? window.parent : null;
+  const local = /^https?:\\/\\/(localhost|127\\.0\\.0\\.1|\\[::1\\]|[a-z0-9-]+\\.localhost)(:\\d+)?$/;
+  if (parent) {
+    const ancestors = window.location && window.location.ancestorOrigins;
+    let above = ancestors && ancestors.length > 0 ? ancestors[0] : null;
+    if (above === null && window.document && window.document.referrer) {
+      try {
+        above = new URL(window.document.referrer).origin;
+      } catch {
+        above = null;
+      }
+    }
+    if (above !== null && local.test(above)) return;
+  }
   const base64url = (value) =>
     btoa(unescape(encodeURIComponent(JSON.stringify(value))))
       .replace(/\\+/g, '-')
       .replace(/\\//g, '_')
       .replace(/=+$/, '');
-  // The simulator, if this page is framed by one. Only a page on this
-  // computer is ever told anything: the origin that says hello is checked,
-  // and every message after it is addressed to that origin alone.
-  const frame = window.parent && window.parent !== window ? window.parent : null;
-  const local = /^https?:\\/\\/(localhost|127\\.0\\.0\\.1|\\[::1\\]|[a-z0-9-]+\\.localhost)(:\\d+)?$/;
-  const unsent = [];
-  let simulator = null;
-  // A message crosses to another page as a copy, and only plain data copies.
-  const plain = (value) => {
-    if (value === undefined) return undefined;
-    try {
-      return JSON.parse(JSON.stringify(value));
-    } catch {
-      return String(value);
-    }
-  };
-  const tell = (message) => {
-    if (!frame) return;
-    const packet = Object.assign({ bankroll: config.channel }, message);
-    if (simulator) frame.postMessage(packet, simulator);
-    else if (unsent.length < config.unsentLimit) unsent.push(packet);
-  };
-  // The simulated phone's safe area, where the page's CSS can read it: in a
-  // stylesheet of this script's own. Written on the root element they would be
-  // attributes the page's framework never rendered, and React says so when it
-  // hydrates. Each side is a length and nothing else, whatever was sent.
-  let safeAreaSheet = null;
-  const showSafeArea = (insets) => {
-    const page = window.document;
-    if (!insets || typeof insets !== 'object' || !page || !page.adoptedStyleSheets || !window.CSSStyleSheet) return;
-    const sides = ['top', 'right', 'bottom', 'left'].filter((side) => typeof insets[side] === 'number' && insets[side] >= 0 && insets[side] < Infinity);
-    if (!safeAreaSheet) safeAreaSheet = new window.CSSStyleSheet();
-    safeAreaSheet.replaceSync(':root{' + sides.map((side) => config.safeAreaVariable + side + ':' + insets[side] + 'px').join(';') + '}');
-    if (!page.adoptedStyleSheets.includes(safeAreaSheet)) page.adoptedStyleSheets = [...page.adoptedStyleSheets, safeAreaSheet];
-  };
-  if (frame) {
-    window.addEventListener('message', (event) => {
-      const data = event.data;
-      if (event.source !== frame || !data || data.bankroll !== config.channel || data.type !== 'hello') return;
-      if (!local.test(event.origin)) return;
-      simulator = event.origin;
-      showSafeArea(data.safeArea);
-      while (unsent.length) frame.postMessage(unsent.shift(), simulator);
-    });
-    // To any parent, because its origin is not known yet: this says a
-    // stand-in host is here, and nothing else.
-    frame.postMessage({ bankroll: config.channel, type: 'ready', version: config.version }, '*');
-  }
-  let calls = 0;
-  const told = (method, answer) => async (input) => {
-    const id = ++calls;
-    const began = Date.now();
-    tell({ type: 'call', id, method, input: plain(input), at: began });
-    try {
-      const value = await answer(input);
-      tell({ type: 'result', id, method, ok: true, value: plain(value), ms: Date.now() - began });
-      return value;
-    } catch (error) {
-      tell({ type: 'result', id, method, ok: false, error: String((error && error.message) || error), ms: Date.now() - began });
-      throw error;
-    }
-  };
-  const host = {
-    // Where a page says which SDK it runs. A simulator hears it as it hears
-    // every call.
+  window.bankroll = {
+    version: config.version,
+    // Where a page says which SDK it runs.
     init: async () => undefined,
     session: async () => config.token,
     identity: async () => config.token,
@@ -522,15 +423,6 @@ export function mockHostScript(options: MockHostOptions): string {
     promptReview: async () => undefined,
     quote: async () => undefined,
     requestAmount: async () => ({ status: 'dismissed' }),
-  };
-  window.bankroll = { version: config.version };
-  for (const method of Object.keys(host)) window.bankroll[method] = told(method, host[method]);
-  // A call the SDK refused before it asked, one made before init(): nothing
-  // else of it would be heard. A simulator is told it as a call that failed.
-  window.bankroll.refused = (method, reason) => {
-    const id = ++calls;
-    tell({ type: 'call', id, method: String(method), at: Date.now() });
-    tell({ type: 'result', id, method: String(method), ok: false, error: String(reason), ms: 0 });
   };
 })();`;
 }

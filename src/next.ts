@@ -218,13 +218,14 @@ export function manifestRoute(app: ManifestApp): (request?: Request) => Promise<
  * The stand-in host for a browser. Render it in the layout the app's pages
  * share, and with BANKROLL_MOCK=1 outside production the page gets the
  * `window.bankroll` the Bankroll app would have injected: the app runs in any
- * browser as a pretend user, and in a simulator, which is told each call.
+ * browser tab as a pretend user.
  *
  *   <MockHost payee={payeeAddress() ?? ''} />
  *
  * It yields to a host that is already there, so a test that injects its own
- * with `mockHostScript` keeps it. A production build renders nothing:
- * `mockEnabled()` is false there.
+ * with `mockHostScript` keeps it, and it steps aside in a simulator, where the
+ * SDK's own bridge is the host and the simulator answers. A production build
+ * renders nothing: `mockEnabled()` is false there.
  */
 export function MockHost(options: MockHostOptions): ReactElement | null {
   if (!mockEnabled()) return null;

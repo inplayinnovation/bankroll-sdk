@@ -6,6 +6,11 @@
 // is the only thing that signs. This module never touches a wallet — it only
 // brokers the two capabilities (session, charge) and normalises the host's
 // machine-readable rejection reasons into typed BankrollError codes.
+//
+// In a simulator on a developer's computer there is no Bankroll app to put
+// window.bankroll on the page, so the SDK puts a bridge there itself, which
+// passes each call to the simulator around the page (./bridge).
+import { installBridge } from './bridge';
 import { BANKROLL_TOKEN_HEADER } from './constants';
 
 export { BANKROLL_TOKEN_HEADER };
@@ -71,8 +76,12 @@ const leadingInt = (version: string): number => parseInt(version, 10);
 //                       non-numeric window.bankroll, or the legacy pre-SDK
 //                       bridge signalled only by window.__BANKROLL_CONFIG__).
 //   'ready'           — a current host; session()/charge() will work.
+//
+// Asked first of anything, so this is where a page in a simulator gets its
+// bridge: once, and only on a local page in a frame (./bridge).
 function status(): BankrollStatus {
   if (typeof window === 'undefined') return STATUS_UNAVAILABLE;
+  installBridge();
   const host = window.bankroll;
   if (host) {
     return leadingInt(host.version) >= MIN_HOST_VERSION ? STATUS_READY : STATUS_UPDATE_REQUIRED;
@@ -261,12 +270,15 @@ function init(options?: InitOptions): Promise<void> {
 //
 // The host never hears a call that is refused here, and an app that catches
 // the error hears nothing either: a balance that will not load, and no reason
-// given. So a stand-in host is told, and passes it on to a simulator as a call
+// given. So the bridge is told, and passes it on to the simulator as a call
 // that failed. `method` is the host's name for the call.
 function started(method: string): Promise<void> {
   if (initialized !== null) return initialized;
   try {
-    if (typeof window !== 'undefined') window.bankroll?.refused?.(method, MESSAGE_NOT_INITIALIZED);
+    if (typeof window !== 'undefined') {
+      installBridge();
+      window.bankroll?.refused?.(method, MESSAGE_NOT_INITIALIZED);
+    }
   } catch {
     // Telling is a courtesy. The refusal below is the point.
   }

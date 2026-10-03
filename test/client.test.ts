@@ -253,6 +253,64 @@ describe('status', () => {
   });
 });
 
+// A page on this computer, in a frame: where the SDK puts its own bridge and
+// the simulator around the page answers (src/bridge.ts). The parent is stood
+// in for, and the bridge's listener is caught as it is registered.
+describe('status in a simulator', () => {
+  const SIMULATOR = 'http://localhost:4100';
+  const original = Object.getOwnPropertyDescriptor(window, 'parent');
+
+  function frameThePage() {
+    const posts: { message: Record<string, unknown>; to: string }[] = [];
+    const parent = { postMessage: (message: Record<string, unknown>, to: string) => posts.push({ message, to }) };
+    Object.defineProperty(window, 'parent', { value: parent, configurable: true });
+    let listener: ((event: { source: unknown; origin: string; data: unknown }) => void) | null = null;
+    vi.spyOn(window, 'addEventListener').mockImplementation(((type: string, handler: unknown) => {
+      if (type === 'message') listener = handler as typeof listener;
+    }) as typeof window.addEventListener);
+    const hear = (data: unknown) => listener?.({ source: parent, origin: SIMULATOR, data });
+    return { posts, hear };
+  }
+
+  afterEach(async () => {
+    if (original) Object.defineProperty(window, 'parent', original);
+    (await import('../src/bridge')).resetBridge();
+  });
+
+  it('puts a bridge on the page the first time it is asked, and the simulator answers the calls', async () => {
+    expect(window.location.origin).toMatch(/^http:\/\/localhost/);
+    const { posts, hear } = frameThePage();
+    const { bankroll } = await load({ started: false });
+    expect(bankroll.status()).toBe('ready');
+    expect(posts).toEqual([{ message: { bankroll: 'simulator', type: 'ready', sdk: expect.any(String) }, to: '*' }]);
+
+    hear({ bankroll: 'simulator', type: 'hello', version: '5' });
+    const starting = bankroll.init();
+    // A charge waits for init() to be answered, as every call does.
+    const charging = bankroll.charge({ amountCents: 500, idempotencyKey: 'once' });
+    const calls = () => posts.filter((post) => post.message.type === 'call').map((post) => post.message);
+    expect(calls()).toEqual([{ bankroll: 'simulator', type: 'call', id: 1, feature: 'bankroll:init', input: { sdk: expect.any(String) }, at: expect.any(Number) }]);
+    hear({ bankroll: 'simulator', type: 'result', id: 1, ok: true });
+    await starting;
+    await Promise.resolve();
+    expect(calls()).toHaveLength(2);
+    expect(calls()[1]).toEqual({ bankroll: 'simulator', type: 'call', id: 2, feature: 'bankroll:pay', input: { amountCents: 500, idempotencyKey: 'once' }, at: expect.any(Number) });
+    hear({ bankroll: 'simulator', type: 'result', id: 2, ok: false, error: 'insufficient_funds' });
+    await expect(charging).rejects.toMatchObject({ code: 'insufficient_funds' });
+  });
+
+  it('tells the simulator of a call made before init()', async () => {
+    const { posts, hear } = frameThePage();
+    const { bankroll } = await load({ started: false });
+    // The first call of all: the bridge goes on the page as it is refused, and
+    // the refusal is kept for the simulator until it says hello.
+    await expect(bankroll.balances()).rejects.toMatchObject({ code: 'not_initialized' });
+    expect(posts.map((post) => post.message.type)).toEqual(['ready']);
+    hear({ bankroll: 'simulator', type: 'hello' });
+    expect(posts.at(-1)?.message).toMatchObject({ type: 'refused', feature: 'bankroll:balances' });
+  });
+});
+
 describe('identity', () => {
   it('resolves the token', async () => {
     const token = freshToken();

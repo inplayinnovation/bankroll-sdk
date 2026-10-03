@@ -15,7 +15,6 @@ import {
   mockSession,
   mockToken,
   parseMockSignature,
-  SIMULATOR_CHANNEL,
 } from '../src/mock';
 import { getSession } from '../src/next';
 import { buildPayout, confirmPayout } from '../src/payouts';
@@ -41,41 +40,6 @@ function hostFrom(script: string, fakeWindow: { bankroll?: Host } = {}) {
   );
   if (!fakeWindow.bankroll) throw new Error('script did not define window.bankroll');
   return fakeWindow.bankroll;
-}
-
-// The same in a frame: a parent that records what it is posted, and a way to
-// deliver a message as that parent, or as someone else. `page` is whatever
-// else the window has, such as a document.
-function framedHost(script: string, page: Record<string, unknown> = {}) {
-  const posts: { message: Record<string, unknown>; to: string }[] = [];
-  const parent = { postMessage: (message: Record<string, unknown>, to: string) => posts.push({ message, to }) };
-  let listener: (event: { source: unknown; origin: string; data: unknown }) => void = () => {};
-  const host = hostFrom(script, {
-    ...page,
-    parent,
-    addEventListener: (_type: string, handler: typeof listener) => {
-      listener = handler;
-    },
-  } as { bankroll?: Host });
-  const hear = (origin: string, data: unknown, source: unknown = parent) => listener({ source, origin, data });
-  return { host, posts, hear };
-}
-
-// As much of a page's stylesheets as the script uses: a document that adopts
-// them, and a sheet that keeps the text it was last given.
-function stylesheets() {
-  const made: { text: string }[] = [];
-  class CSSStyleSheet {
-    text = '';
-    constructor() {
-      made.push(this);
-    }
-    replaceSync(text: string) {
-      this.text = text;
-    }
-  }
-  const document = { adoptedStyleSheets: [] as unknown[] };
-  return { made, document, page: { document, CSSStyleSheet } };
 }
 
 const originalEnv = { NODE_ENV: process.env.NODE_ENV, BANKROLL_MOCK: process.env.BANKROLL_MOCK };
@@ -241,6 +205,8 @@ describe('mock signatures', () => {
     });
     expect(charge.slot).toBeGreaterThan(0);
     expect(fetchMock).not.toHaveBeenCalled();
+    // With no chain named there is nothing to look in; a simulator names its local chain.
+    vi.stubEnv('SOLANA_RPC_URL', undefined);
     expect(await findChargeByReference('anything')).toBeNull();
   });
 
@@ -270,174 +236,33 @@ describe('mockHostScript', () => {
   });
 });
 
-describe('mockHostScript and a simulator', () => {
-  const HELLO = { bankroll: SIMULATOR_CHANNEL, type: 'hello' };
+describe('mockHostScript in a simulator', () => {
   const SIMULATOR = 'http://localhost:4100';
+  // A page in a frame, and what its browser says of the page above it.
+  const framedBy = (ancestor: string | null, referrer = '') => {
+    const parent = { postMessage: () => {} };
+    return {
+      parent,
+      location: { ancestorOrigins: ancestor === null ? [] : [ancestor] },
+      document: { referrer },
+      addEventListener: () => {},
+    } as unknown as { bankroll?: Host };
+  };
 
-  // A test, a plain tab and a phone all run the app as the top window.
-  it('says nothing outside a frame', async () => {
-    const posts: unknown[] = [];
-    const top: Record<string, unknown> = { postMessage: (message: unknown) => posts.push(message) };
+  // The SDK's bridge is the host there: the stand-in would only stand in its way.
+  it('steps aside on a page framed by a page on this computer', () => {
+    for (const page of [framedBy(SIMULATOR), framedBy(null, `${SIMULATOR}/?app=x`)]) {
+      expect(() => hostFrom(mockHostScript({ payee: PAYEE }), page)).toThrow('did not define window.bankroll');
+    }
+  });
+
+  it('stands in everywhere else: the top window, and a frame in somebody else\'s page', async () => {
+    const top: Record<string, unknown> = { postMessage: () => {} };
     top.parent = top;
-    const host = hostFrom(mockHostScript({ payee: PAYEE }), top as { bankroll?: Host });
-    await host.balances!();
-    expect(posts).toEqual([]);
-  });
-
-  it('says only that it is there, until a page on this computer says hello', async () => {
-    const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
-    expect(posts).toEqual([{ message: { bankroll: SIMULATOR_CHANNEL, type: 'ready', version: '4' }, to: '*' }]);
-
-    await host.session!();
-    // Somebody else's page framing the app, and a local page that is not the parent.
-    hear('https://simulator.example', HELLO);
-    hear(SIMULATOR, HELLO, {});
-    // The right page, saying something else.
-    hear(SIMULATOR, { bankroll: SIMULATOR_CHANNEL, type: 'call' });
-    expect(posts).toHaveLength(1);
-  });
-
-  it('tells a simulator every call, starting with the ones it missed', async () => {
-    const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE, cashCents: 500 }));
-    await host.balances!();
-    hear(SIMULATOR, HELLO);
-    await host.haptics!({ type: 'light' });
-
-    const told = posts.slice(1);
-    expect(told.map((post) => post.to)).toEqual([SIMULATOR, SIMULATOR, SIMULATOR, SIMULATOR]);
-    expect(told.map((post) => post.message)).toMatchObject([
-      { bankroll: SIMULATOR_CHANNEL, type: 'call', id: 1, method: 'balances' },
-      { type: 'result', id: 1, method: 'balances', ok: true, value: { cashCents: 500, creditsCents: 0, tokens: {} } },
-      { type: 'call', id: 2, method: 'haptics', input: { type: 'light' } },
-      { type: 'result', id: 2, method: 'haptics', ok: true },
-    ]);
-    expect(told[0]!.message.at).toEqual(expect.any(Number));
-    expect(told[1]!.message.ms).toEqual(expect.any(Number));
-  });
-
-  it('tells a simulator which SDK the page said it runs', async () => {
-    const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
-    hear(SIMULATOR, HELLO);
-    await host.init!({ sdk: '0.33.0' });
-    expect(posts.slice(1).map((post) => post.message)).toMatchObject([
-      { type: 'call', id: 1, method: 'init', input: { sdk: '0.33.0' } },
-      { type: 'result', id: 1, method: 'init', ok: true },
-    ]);
-  });
-
-  it('tells a simulator a call the SDK refused, as one that failed', async () => {
-    const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
-    hear(SIMULATOR, HELLO);
-    (host.refused as unknown as (method: string, reason: string) => void)('balances', 'bankroll.init() has not been called.');
-    expect(posts.slice(1).map((post) => post.message)).toMatchObject([
-      { type: 'call', id: 1, method: 'balances' },
-      { type: 'result', id: 1, method: 'balances', ok: false, error: 'bankroll.init() has not been called.' },
-    ]);
-  });
-
-  it('takes hello from any local address, and from nowhere else', async () => {
-    for (const origin of ['http://127.0.0.1:4100', 'http://[::1]:4100', 'http://simulator.localhost:4100', 'https://localhost']) {
-      const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
-      hear(origin, HELLO);
-      await host.deposit!();
-      expect(posts.at(-1)?.to).toBe(origin);
+    expect(hostFrom(mockHostScript({ payee: PAYEE }), top as { bankroll?: Host }).version).toBe('4');
+    for (const page of [framedBy('https://simulator.example'), framedBy(null, 'https://simulator.example/'), framedBy(null, 'not a url'), framedBy(null)]) {
+      const host = hostFrom(mockHostScript({ payee: PAYEE }), page);
+      expect(await host.balances!()).toEqual({ cashCents: 100_000, creditsCents: 0, tokens: {} });
     }
-    for (const origin of ['https://localhost.example', 'http://localhost:4100.example', 'https://example.com', 'null']) {
-      const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
-      hear(origin, HELLO);
-      await host.deposit!();
-      expect(posts).toHaveLength(1);
-    }
-  });
-
-  it('tells a call that failed as one, and still fails it', async () => {
-    vi.stubGlobal('fetch', async () => {
-      throw new Error('offline');
-    });
-    const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
-    hear(SIMULATOR, HELLO);
-    await expect(host.pay!({ amountCents: 100, reference: `${MOCK_REFERENCE_PREFIX}one` })).rejects.toThrow('offline');
-    expect(posts.at(-1)?.message).toMatchObject({ type: 'result', method: 'pay', ok: false, error: 'offline' });
-  });
-
-  it('stops keeping calls for a simulator that never comes', async () => {
-    const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
-    for (let call = 0; call < 150; call++) await host.balances!();
-    hear(SIMULATOR, HELLO);
-    // 200 messages are kept, two to a call; the ready before them makes 201.
-    expect(posts).toHaveLength(201);
-  });
-});
-
-describe('mockHostScript and the safe area of a simulated phone', () => {
-  const HELLO = { bankroll: SIMULATOR_CHANNEL, type: 'hello' };
-  const SIMULATOR = 'http://localhost:4100';
-  const PHONE = { top: 62, right: 0, bottom: 34, left: 0 };
-
-  it('puts it where the page\'s CSS can read it, in a stylesheet of its own', () => {
-    const { made, document, page } = stylesheets();
-    const { hear } = framedHost(mockHostScript({ payee: PAYEE }), page);
-    expect(document.adoptedStyleSheets).toEqual([]);
-
-    hear(SIMULATOR, { ...HELLO, safeArea: PHONE });
-    expect(document.adoptedStyleSheets).toEqual([made[0]]);
-    expect(made[0]!.text).toBe(
-      ':root{--bankroll-safe-area-inset-top:62px;--bankroll-safe-area-inset-right:0px;--bankroll-safe-area-inset-bottom:34px;--bankroll-safe-area-inset-left:0px}',
-    );
-  });
-
-  it('takes another phone in place of the last, in the same stylesheet', () => {
-    const { made, document, page } = stylesheets();
-    const { hear } = framedHost(mockHostScript({ payee: PAYEE }), page);
-    hear(SIMULATOR, { ...HELLO, safeArea: PHONE });
-    hear(SIMULATOR, { ...HELLO, safeArea: { ...PHONE, top: 47 } });
-    expect(made).toHaveLength(1);
-    expect(document.adoptedStyleSheets).toHaveLength(1);
-    expect(made[0]!.text).toContain('--bankroll-safe-area-inset-top:47px');
-    expect(made[0]!.text).not.toContain('62px');
-
-    // A hello that says nothing of a phone leaves the last one standing.
-    hear(SIMULATOR, HELLO);
-    expect(made[0]!.text).toContain('--bankroll-safe-area-inset-top:47px');
-  });
-
-  it('keeps its stylesheet beside the page\'s own, and puts it back if the page drops it', () => {
-    const { made, document, page } = stylesheets();
-    const theirs = { text: 'the page\'s own' };
-    document.adoptedStyleSheets = [theirs];
-    const { hear } = framedHost(mockHostScript({ payee: PAYEE }), page);
-    hear(SIMULATOR, { ...HELLO, safeArea: PHONE });
-    expect(document.adoptedStyleSheets).toEqual([theirs, made[0]]);
-
-    document.adoptedStyleSheets = [];
-    hear(SIMULATOR, { ...HELLO, safeArea: PHONE });
-    expect(document.adoptedStyleSheets).toEqual([made[0]]);
-  });
-
-  it('takes it only with a hello it takes, and only as lengths', () => {
-    // Somebody else's page framing the app, and a local page that is not the parent.
-    const refused = stylesheets();
-    const stranger = framedHost(mockHostScript({ payee: PAYEE }), refused.page);
-    stranger.hear('https://simulator.example', { ...HELLO, safeArea: PHONE });
-    stranger.hear(SIMULATOR, { ...HELLO, safeArea: PHONE }, {});
-    expect(refused.made).toEqual([]);
-    expect(refused.document.adoptedStyleSheets).toEqual([]);
-
-    // Anything that is not a length from an edge is left out: it would be CSS of the sender's choosing.
-    const { made, page } = stylesheets();
-    const { hear } = framedHost(mockHostScript({ payee: PAYEE }), page);
-    hear(SIMULATOR, { ...HELLO, safeArea: { top: '62px;color:red', right: -1, bottom: Infinity, left: 3.5 } });
-    expect(made[0]!.text).toBe(':root{--bankroll-safe-area-inset-left:3.5px}');
-    hear(SIMULATOR, { ...HELLO, safeArea: { top: Number.NaN } });
-    expect(made[0]!.text).toBe(':root{}');
-    hear(SIMULATOR, { ...HELLO, safeArea: 'tall' });
-    expect(made[0]!.text).toBe(':root{}');
-  });
-
-  it('still tells its calls where a page cannot adopt a stylesheet', async () => {
-    const { host, posts, hear } = framedHost(mockHostScript({ payee: PAYEE }));
-    hear(SIMULATOR, { ...HELLO, safeArea: PHONE });
-    await host.deposit!();
-    expect(posts.at(-1)?.message).toMatchObject({ type: 'result', method: 'deposit', ok: true });
   });
 });
