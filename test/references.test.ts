@@ -276,12 +276,19 @@ describe('findPayoutByReference', () => {
     expect(server.requests[0].params[1]).toMatchObject({ commitment: 'confirmed', limit: 1000 });
   });
 
-  it('answers null under the mock host without reaching an RPC', async () => {
-    const server = await serve([rpcResult([{ signature: OLDEST, slot: 1, err: null }])]);
+  it('answers null under the stand-in host without reaching an RPC, unless a chain is named', async () => {
+    const server = await serve([rpcResult([{ signature: OLDEST, slot: 1, err: null }]), rpcResult(null)]);
     process.env.BANKROLL_MOCK = '1';
+    const rpc = process.env.SOLANA_RPC_URL;
+    delete process.env.SOLANA_RPC_URL;
 
     await expect(findPayoutByReference(REFERENCE)).resolves.toBeNull();
     expect(server.requests).toHaveLength(0);
+
+    // A simulator's local chain: the payments on it are real, and looked for.
+    process.env.SOLANA_RPC_URL = rpc;
+    await findPayoutByReference(REFERENCE).catch(() => null);
+    expect(server.requests.length).toBeGreaterThan(0);
   });
 });
 describe('createManagedReference', () => {

@@ -2,10 +2,13 @@
 import { generateKeyPairSync } from 'node:crypto';
 
 import bs58 from 'bs58';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BANKROLL_TOKEN_HEADER } from '../src/constants';
 import {
+  MockHost,
   Unauthorized,
   getOrigin,
   getSession,
@@ -357,5 +360,39 @@ describe('manifestRoute environment', () => {
 
     vi.stubEnv('BANKROLL_ENVIRONMENT', undefined);
     expect(decodeManifest(await (await manifestRoute(APP)()).text())).not.toHaveProperty('environment');
+  });
+});
+
+describe('MockHost', () => {
+  const PAYEE = 'uhpn1gHscLtCv1vkLSjYNNFXpZyJnGz1ynXWM9WaD7X';
+  const render = (options: Parameters<typeof MockHost>[0]) => renderToStaticMarkup(createElement(MockHost, options));
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('renders nothing unless the mock is on, and never in production', () => {
+    vi.stubEnv('BANKROLL_MOCK', undefined);
+    expect(render({ payee: PAYEE })).toBe('');
+
+    vi.stubEnv('BANKROLL_MOCK', '1');
+    vi.stubEnv('NODE_ENV', 'production');
+    expect(render({ payee: PAYEE })).toBe('');
+  });
+
+  it('puts the stand-in host on the page, behind any host already there', () => {
+    vi.stubEnv('BANKROLL_MOCK', '1');
+    vi.stubEnv('NODE_ENV', 'development');
+    const markup = render({ payee: PAYEE, username: 'owner' });
+    expect(markup.startsWith('<script>if (!window.bankroll) { (() => {')).toBe(true);
+    expect(markup.endsWith('})(); }</script>')).toBe(true);
+    expect(markup).toContain(PAYEE);
+  });
+
+  // The options are the app's own strings; one must not be able to end the script.
+  it('cannot be closed early by an option', () => {
+    vi.stubEnv('BANKROLL_MOCK', '1');
+    vi.stubEnv('NODE_ENV', 'development');
+    const markup = render({ payee: '</script><script>alert(1)</script>' });
+    expect(markup.match(/<\/script>/g)).toHaveLength(1);
+    expect(markup.endsWith('</script>')).toBe(true);
   });
 });

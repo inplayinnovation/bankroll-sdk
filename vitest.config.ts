@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { loadEnv } from 'vite';
 import { defineConfig } from 'vitest/config';
 
@@ -18,5 +20,8 @@ export default defineConfig(({ mode }) => {
   for (const [key, value] of Object.entries(loadEnv(mode, process.cwd(), ''))) {
     process.env[key] ??= value;
   }
-  return {};
+  // The version tsup bakes into the build (tsup.config.ts), for the source the
+  // tests run.
+  const { version } = JSON.parse(readFileSync('./package.json', 'utf8')) as { version: string };
+  return { define: { __SDK_VERSION__: JSON.stringify(version) } };
 });

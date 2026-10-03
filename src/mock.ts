@@ -13,6 +13,10 @@ import type { Json } from './matchmaking';
 //                     too: createMatchmaking pairs in this process instead of
 //                     calling Bankroll (src/matchmaking-mock.ts).
 //
+// The browser half also talks to a simulator: a page on the developer's own
+// computer that frames the app and shows what it asks of its host. See "The
+// simulator" below.
+//
 // The server half is honoured ONLY when BANKROLL_MOCK=1 and NODE_ENV is not
 // production. A production build never reads the flag, so a token or
 // signature from this file is worthless against a deployment.
@@ -321,6 +325,12 @@ export function armMockExpiry(reference: string, expiresAt: string): void {
 // The browser half
 // ---------------------------------------------------------------------------
 
+// A test's stand-in host, as the Bankroll app would be. In a simulator the
+// SDK's own bridge is the host (./bridge), and this steps aside: a page framed
+// by a page on this computer gets no stand-in, so the bridge takes its place
+// and the simulator answers, as a person of the developer's choosing.
+export { SIMULATOR_CHANNEL, type SafeAreaInsets, type SimulatorMessage } from './bridge';
+
 /**
  * JavaScript that defines `window.bankroll` as the Bankroll app would, with
  * every call succeeding at once. Run it before the page's own scripts:
@@ -330,6 +340,9 @@ export function armMockExpiry(reference: string, expiresAt: string): void {
  * `payee` is the address the app's manifest declares; read it from
  * `/.well-known/bankroll.jwt` so the server's payee check exercises the real
  * value.
+ *
+ * In a Next app, `MockHost` from `@joinbankroll/sdk/next` puts this on the page.
+ * In a simulator it does nothing, and the SDK's bridge is the host instead.
  */
 export function mockHostScript(options: MockHostOptions): string {
   const token = mockToken(options);
@@ -350,6 +363,23 @@ export function mockHostScript(options: MockHostOptions): string {
   });
   return `(() => {
   const config = ${config};
+  // Framed by a page on this computer: a simulator, whose host is the SDK's
+  // bridge. The browser says who the parent is where it can; where it cannot,
+  // the page that opened this one is the next best word.
+  const parent = window.parent && window.parent !== window ? window.parent : null;
+  const local = /^https?:\\/\\/(localhost|127\\.0\\.0\\.1|\\[::1\\]|[a-z0-9-]+\\.localhost)(:\\d+)?$/;
+  if (parent) {
+    const ancestors = window.location && window.location.ancestorOrigins;
+    let above = ancestors && ancestors.length > 0 ? ancestors[0] : null;
+    if (above === null && window.document && window.document.referrer) {
+      try {
+        above = new URL(window.document.referrer).origin;
+      } catch {
+        above = null;
+      }
+    }
+    if (above !== null && local.test(above)) return;
+  }
   const base64url = (value) =>
     btoa(unescape(encodeURIComponent(JSON.stringify(value))))
       .replace(/\\+/g, '-')
@@ -357,6 +387,8 @@ export function mockHostScript(options: MockHostOptions): string {
       .replace(/=+$/, '');
   window.bankroll = {
     version: config.version,
+    // Where a page says which SDK it runs.
+    init: async () => undefined,
     session: async () => config.token,
     identity: async () => config.token,
     pay: async (input) => {

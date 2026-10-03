@@ -159,9 +159,11 @@ export async function findChargeByReference(
   reference: string,
   options?: FindChargeOptions,
 ): Promise<ConfirmedCharge | null> {
-  // The mock host settles nothing on-chain, so there is never anything to
-  // recover. Answering "nothing found" keeps a sweep from reaching an RPC.
-  if (mockEnabled()) return null;
+  // The stand-in host settles nothing on-chain, so there is never anything to
+  // recover: answering "nothing found" keeps a sweep from reaching an RPC. In
+  // a simulator the payments are real to a local chain, and SOLANA_RPC_URL
+  // names it, so the chain is asked.
+  if (mockEnabled() && !process.env.SOLANA_RPC_URL) return null;
 
   for (const entry of await historyOldestFirst(reference, options)) {
     if (entry.err) continue;
@@ -206,8 +208,9 @@ export async function findChargeByReference(
  * look is not a negative answer, and must never be treated as one.
  */
 export async function findPayoutByReference(reference: string): Promise<FoundPayout | null> {
-  // The mock host settles nothing on-chain, so there is never anything to find.
-  if (mockEnabled()) return null;
+  // The stand-in host settles nothing on-chain, so there is never anything to
+  // find; a simulator's local chain, named by SOLANA_RPC_URL, is asked.
+  if (mockEnabled() && !process.env.SOLANA_RPC_URL) return null;
 
   let history: RpcSignature[];
   try {
