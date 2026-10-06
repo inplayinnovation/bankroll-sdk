@@ -9,11 +9,18 @@ npm install @joinbankroll/sdk
 ```ts
 import { bankroll } from '@joinbankroll/sdk'
 
+bankroll.init()                      // once, first, in the browser: every call below but status() fails without it
 bankroll.status()                    // 'unavailable' | 'update_required' | 'ready' — sync, SSR-safe
 await bankroll.session()             // the session token, scoped to your origin
 await bankroll.session({ identity: true }) // ...resolving only for a verified real person
 await bankroll.charge({ amountCents: 500 })  // charge $5.00 to your payment address
 ```
+
+`init()` goes at the top of a client module every page loads (in Next, a file
+with `'use client'`), not in a component and not in a server file: code there
+never runs in the browser. It tells the Bankroll app which SDK the page runs,
+never rejects, and does nothing during a server render. A call made before it
+rejects with `not_initialized`; one made while it is still running waits for it.
 
 ```ts
 import { verifyToken, confirmCharge, pay } from '@joinbankroll/sdk/server'
@@ -107,16 +114,16 @@ optional entry brings its own peer so you install only what you use.
 
 | Entry | What it is |
 |---|---|
-| `@joinbankroll/sdk` | Browser client. No runtime imports — none of the server half's dependencies reach the browser bundle. SSR-safe. |
+| `@joinbankroll/sdk` | Browser client. No runtime imports — none of the server half's dependencies reach the browser bundle. SSR-safe. In a simulator (`bankroll dev --simulator`) there is no Bankroll app to put `window.bankroll` on the page, so the SDK puts a bridge there itself, on a local page in a frame and nowhere else: each call crosses to the simulator as a window message (`SimulatorMessage` in `@joinbankroll/sdk/mock`) and the simulator answers as the phone would, as a person of the developer's choosing. The simulator also says the safe area of the phone it draws, which no browser on a computer reports, and the bridge sets it on the page as `--bankroll-safe-area-inset-top`, `-right`, `-bottom` and `-left`. Prefer them to the phone's own in CSS, `var(--bankroll-safe-area-inset-top, env(safe-area-inset-top))`, and the page keeps clear of the status bar and the home indicator in the simulator as it does on a phone. |
 | `@joinbankroll/sdk/server` | Token verification, charge confirmation, payouts, treasury, app public key, notifications, and the deployment's environment: `appEnvironment()` reads `BANKROLL_ENVIRONMENT`, which Bankroll sets to `test` on an app's test deployments, and `HSUSD_MINT` then resolves to test cash instead of BCASH, so charges and payouts need no code change. |
 | `@joinbankroll/sdk/matchmaking` | Server client for verified apps: `createTicket`, `listTickets`, `cancelTicket`. Recoverable entries, final head-to-head matches, atomic cancellation. With `BANKROLL_MOCK=1` outside production it pairs in-process instead, and a lone ticket meets a stand-in opponent after a few seconds. |
-| `@joinbankroll/sdk/next` | Server helpers for Next: `getOrigin`, `getSession` / `requireSession`, `requireIdentity`, `manifestRoute`. Server-only — importing it from a client bundle throws. Peer: `next >= 15`. |
+| `@joinbankroll/sdk/next` | Server helpers for Next: `getOrigin`, `getSession` / `requireSession`, `requireIdentity`, `manifestRoute`, and `MockHost`, which puts the stand-in host on the page with `BANKROLL_MOCK=1` outside production. Server-only — importing it from a client bundle throws. Peers: `next >= 15`, `react >= 18`. |
 | `@joinbankroll/sdk/manifest` | `manifestClaims(input)`: the manifest's claims as a plain object, with no framework dependency — what `manifestRoute` serves, for tooling that builds an app's manifest before the app is deployed. |
 | `@joinbankroll/sdk/restrictions` | Where, and from what age, the app may take real money. `restrictionPolicyFromEnv()` reads the `BANKROLL_RESTRICTIONS` policy and `restrictionFor(session, policy)` says whether a verified session may pay, and why not. No dependencies. |
 | `@joinbankroll/sdk/store` | Durable JSON with an atomic create and compare-and-swap. `./store` is pure interface; `./store/fs` imports only Node builtins; `./store/vercel` is the only module touching `@vercel/blob` (peer, `>= 2.3.0`). |
 | `@joinbankroll/sdk/react` | `useBankrollStatus` / `useBankrollChecked`, `bankrollFetch`, `verifyIdentity`, and a development overlay. Peer: `react >= 18`. |
 | `@joinbankroll/sdk/privy` | Drop-in payout signer for Privy server wallets. Peer: `@privy-io/node`. |
-| `@joinbankroll/sdk/mock` | A stand-in host for tests: `mockHostScript()` defines `window.bankroll` in a headless browser, and with `BANKROLL_MOCK=1` outside production `getSession` and `confirmCharge` accept its token and signatures, and `mockPayoutSigner()` pays out with signatures `confirmPayout` accepts. A production build never reads the flag. |
+| `@joinbankroll/sdk/mock` | A stand-in host for tests: `mockHostScript()` defines `window.bankroll` in a headless browser, and with `BANKROLL_MOCK=1` outside production `getSession` and `confirmCharge` accept its token and signatures, and `mockPayoutSigner()` pays out with signatures `confirmPayout` accepts. A production build never reads the flag. In a simulator the stand-in steps aside and the SDK's bridge is the host. |
 
 Every peer is optional. ESM only. Types are bundled.
 

@@ -10,6 +10,7 @@ import {
   mockEnabled,
   mockHostScript,
   MOCK_BLOCKHASH,
+  MOCK_REFERENCE_PREFIX,
   mockPayoutSigner,
   mockSession,
   mockToken,
@@ -27,9 +28,10 @@ const decode = (segment: string) => JSON.parse(Buffer.from(segment, 'base64url')
 
 const PAYEE = 'uhpn1gHscLtCv1vkLSjYNNFXpZyJnGz1ynXWM9WaD7X';
 
+type Host = Record<string, (input?: unknown) => Promise<unknown>>;
+
 // Runs the browser script against a bare object standing in for window.
-function hostFrom(script: string) {
-  const fakeWindow: { bankroll?: Record<string, (input?: unknown) => Promise<unknown>> } = {};
+function hostFrom(script: string, fakeWindow: { bankroll?: Host } = {}) {
   new Function('window', 'btoa', 'unescape', 'encodeURIComponent', script)(
     fakeWindow,
     (value: string) => Buffer.from(value, 'binary').toString('base64'),
@@ -203,6 +205,8 @@ describe('mock signatures', () => {
     });
     expect(charge.slot).toBeGreaterThan(0);
     expect(fetchMock).not.toHaveBeenCalled();
+    // With no chain named there is nothing to look in; a simulator names its local chain.
+    vi.stubEnv('SOLANA_RPC_URL', undefined);
     expect(await findChargeByReference('anything')).toBeNull();
   });
 
@@ -222,11 +226,43 @@ describe('mockHostScript', () => {
   it('defines the host the client SDK expects', async () => {
     const host = hostFrom(mockHostScript({ payee: PAYEE, cashCents: 500 }));
     expect(host.version).toBe('4');
+    expect(await host.init!({ sdk: '0.33.0' })).toBeUndefined();
     expect(await host.session!()).toBe(await host.identity!());
     expect(mockSession((await host.session!()) as string)?.user.username).toBe('tester');
     expect(await host.balances!()).toEqual({ cashCents: 500, creditsCents: 0, tokens: {} });
     expect(await host.requestAmount!()).toEqual({ status: 'dismissed' });
     expect(await host.haptics!({ type: 'light' })).toBeUndefined();
     expect(await host.promptReview!()).toBeUndefined();
+  });
+});
+
+describe('mockHostScript in a simulator', () => {
+  const SIMULATOR = 'http://localhost:4100';
+  // A page in a frame, and what its browser says of the page above it.
+  const framedBy = (ancestor: string | null, referrer = '') => {
+    const parent = { postMessage: () => {} };
+    return {
+      parent,
+      location: { ancestorOrigins: ancestor === null ? [] : [ancestor] },
+      document: { referrer },
+      addEventListener: () => {},
+    } as unknown as { bankroll?: Host };
+  };
+
+  // The SDK's bridge is the host there: the stand-in would only stand in its way.
+  it('steps aside on a page framed by a page on this computer', () => {
+    for (const page of [framedBy(SIMULATOR), framedBy(null, `${SIMULATOR}/?app=x`)]) {
+      expect(() => hostFrom(mockHostScript({ payee: PAYEE }), page)).toThrow('did not define window.bankroll');
+    }
+  });
+
+  it('stands in everywhere else: the top window, and a frame in somebody else\'s page', async () => {
+    const top: Record<string, unknown> = { postMessage: () => {} };
+    top.parent = top;
+    expect(hostFrom(mockHostScript({ payee: PAYEE }), top as { bankroll?: Host }).version).toBe('4');
+    for (const page of [framedBy('https://simulator.example'), framedBy(null, 'https://simulator.example/'), framedBy(null, 'not a url'), framedBy(null)]) {
+      const host = hostFrom(mockHostScript({ payee: PAYEE }), page);
+      expect(await host.balances!()).toEqual({ cashCents: 100_000, creditsCents: 0, tokens: {} });
+    }
   });
 });

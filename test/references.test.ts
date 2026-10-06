@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import bs58 from 'bs58';
 import { jwtVerify } from 'jose';
-import { parseMockReference } from '../src/mock';
+import { mockReference, parseMockReference } from '../src/mock';
 
 import { BASE_UNITS_PER_CENT, ConfirmChargeError, HSUSD_MINT } from '../src/charges';
 import { PayError } from '../src/payouts';
@@ -276,12 +276,24 @@ describe('findPayoutByReference', () => {
     expect(server.requests[0].params[1]).toMatchObject({ commitment: 'confirmed', limit: 1000 });
   });
 
-  it('answers null under the mock host without reaching an RPC', async () => {
-    const server = await serve([rpcResult([{ signature: OLDEST, slot: 1, err: null }])]);
+  it('answers null under the stand-in host without reaching an RPC, unless a chain is named', async () => {
+    const server = await serve([rpcResult([{ signature: OLDEST, slot: 1, err: null }]), rpcResult(null)]);
     process.env.BANKROLL_MOCK = '1';
+    const rpc = process.env.SOLANA_RPC_URL;
+    delete process.env.SOLANA_RPC_URL;
 
     await expect(findPayoutByReference(REFERENCE)).resolves.toBeNull();
     expect(server.requests).toHaveLength(0);
+
+    // A simulator's local chain: the payments on it are real, and looked for.
+    process.env.SOLANA_RPC_URL = rpc;
+    await findPayoutByReference(REFERENCE).catch(() => null);
+    expect(server.requests.length).toBeGreaterThan(0);
+
+    // A reference the stand-in host minted is never on any chain, named or not.
+    const asked = server.requests.length;
+    await expect(findPayoutByReference(mockReference({ entryId: 'e1' }, '2026-09-18T18:07:00.000Z'))).resolves.toBeNull();
+    expect(server.requests.length).toBe(asked);
   });
 });
 describe('createManagedReference', () => {

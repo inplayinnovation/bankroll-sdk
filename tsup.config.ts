@@ -1,4 +1,10 @@
+import { readFileSync } from 'node:fs'
+
 import { defineConfig } from 'tsup'
+
+// This package's version, baked in at build time: init() tells the host which
+// SDK a page runs.
+const { version } = JSON.parse(readFileSync('./package.json', 'utf8'))
 
 export default defineConfig({
   entry: [
@@ -20,4 +26,5 @@ export default defineConfig({
   dts: true,
   clean: true,
   target: 'es2022',
+  define: { __SDK_VERSION__: JSON.stringify(version) },
 })

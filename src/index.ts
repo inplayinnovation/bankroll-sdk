@@ -6,6 +6,11 @@
 // is the only thing that signs. This module never touches a wallet — it only
 // brokers the two capabilities (session, charge) and normalises the host's
 // machine-readable rejection reasons into typed BankrollError codes.
+//
+// In a simulator on a developer's computer there is no Bankroll app to put
+// window.bankroll on the page, so the SDK puts a bridge there itself, which
+// passes each call to the simulator around the page (./bridge).
+import { installBridge } from './bridge';
 import { BANKROLL_TOKEN_HEADER } from './constants';
 
 export { BANKROLL_TOKEN_HEADER };
@@ -30,6 +35,11 @@ const TOKEN_REFRESH_MARGIN_MS = 60_000;
 const MEMO_MAX_LENGTH = 80;
 
 const SECONDS_TO_MS = 1000;
+
+// This package's version, baked in when it is built (tsup.config.ts). A build
+// that left it out says so, where one that named it bare would not load.
+declare const __SDK_VERSION__: string | undefined;
+const SDK_VERSION = typeof __SDK_VERSION__ === 'string' ? __SDK_VERSION__ : 'unknown';
 
 const PLAY_LINK_BASE = 'https://joinbankroll.com/play?url=';
 const HTTPS_PROTOCOL = 'https:';
@@ -66,8 +76,12 @@ const leadingInt = (version: string): number => parseInt(version, 10);
 //                       non-numeric window.bankroll, or the legacy pre-SDK
 //                       bridge signalled only by window.__BANKROLL_CONFIG__).
 //   'ready'           — a current host; session()/charge() will work.
+//
+// Asked first of anything, so this is where a page in a simulator gets its
+// bridge: once, and only on a local page in a frame (./bridge).
 function status(): BankrollStatus {
   if (typeof window === 'undefined') return STATUS_UNAVAILABLE;
+  installBridge();
   const host = window.bankroll;
   if (host) {
     return leadingInt(host.version) >= MIN_HOST_VERSION ? STATUS_READY : STATUS_UPDATE_REQUIRED;
@@ -89,6 +103,7 @@ const CODE_MANIFEST_ERROR = 'manifest_error';
 const CODE_IDEMPOTENCY_CONFLICT = 'idempotency_conflict';
 const CODE_PAYMENT_DENIED = 'payment_denied';
 const CODE_CHARGE_EXPIRED = 'charge_expired';
+const CODE_NOT_INITIALIZED = 'not_initialized';
 const CODE_UNKNOWN = 'unknown';
 
 // Additional reasons the host can reject with — part of the stable public
@@ -111,6 +126,7 @@ export type BankrollErrorCode =
   | typeof CODE_IDEMPOTENCY_CONFLICT
   | typeof CODE_PAYMENT_DENIED
   | typeof CODE_CHARGE_EXPIRED
+  | typeof CODE_NOT_INITIALIZED
   | ReservedErrorCode
   | typeof CODE_UNKNOWN;
 
@@ -126,6 +142,8 @@ export class BankrollError extends Error {
 
 const MESSAGE_UNAVAILABLE = 'Bankroll is not available in this environment';
 const MESSAGE_UPDATE_REQUIRED = 'the Bankroll app must be updated to use this feature';
+const MESSAGE_NOT_INITIALIZED =
+  'bankroll.init() has not been called. Call it once, before any other call, in code that runs in the browser: a client module, not a server one.';
 
 const STATUS_ERROR_MESSAGE: Record<
   typeof STATUS_UNAVAILABLE | typeof STATUS_UPDATE_REQUIRED,
@@ -193,6 +211,78 @@ function requireBridge(
     throw new BankrollError(STATUS_UPDATE_REQUIRED, STATUS_ERROR_MESSAGE[STATUS_UPDATE_REQUIRED]);
   }
   return host;
+}
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+
+const INIT_METHOD = 'init';
+const SESSION_METHOD = 'session';
+
+/**
+ * What an app passes to init(). There is nothing to pass yet: this is where an
+ * app's settings will go.
+ */
+export interface InitOptions {}
+
+// init()'s one run, kept for every call that comes after it.
+let initialized: Promise<void> | null = null;
+
+// Tells the host which SDK this page runs. Outside Bankroll (a plain tab, a
+// server render) and under a Bankroll app too old for this SDK there is nobody
+// to tell, and status() says which. A Bankroll app from before init() has no
+// such method: it is told nothing, and the page runs as it did.
+async function introduce(): Promise<void> {
+  if (status() !== STATUS_READY) return;
+  const host = window.bankroll;
+  if (!host || typeof host[INIT_METHOD] !== 'function') return;
+  try {
+    await host.init!({ sdk: SDK_VERSION });
+  } catch {
+    // What a host makes of the introduction is the host's business. It does
+    // not stop the app.
+  }
+}
+
+/**
+ * Start the SDK. Call it once, before any other call, in code that runs in the
+ * browser. Every call but status() fails with `not_initialized` if init() was
+ * never called; a call made while init() is still running waits for it.
+ *
+ *   bankroll.init();   // at the top of a client module every page loads
+ *
+ * It tells the Bankroll app which SDK the page runs, where the Bankroll app is
+ * new enough to be told. It never rejects, and calling it again is harmless:
+ * the first call is the one that counts. During a server render it does
+ * nothing, so a module that calls it can be rendered on the server.
+ */
+function init(options?: InitOptions): Promise<void> {
+  // Nothing to read from them yet.
+  void options;
+  initialized ??= introduce();
+  return initialized;
+}
+
+// Where every call to the host begins. A call before init() was ever called is
+// a mistake in the app, said plainly and at once. One made while init() is
+// still running waits for it.
+//
+// The host never hears a call that is refused here, and an app that catches
+// the error hears nothing either: a balance that will not load, and no reason
+// given. So the bridge is told, and passes it on to the simulator as a call
+// that failed. `method` is the host's name for the call.
+function started(method: string): Promise<void> {
+  if (initialized !== null) return initialized;
+  try {
+    if (typeof window !== 'undefined') {
+      installBridge();
+      window.bankroll?.refused?.(method, MESSAGE_NOT_INITIALIZED);
+    }
+  } catch {
+    // Telling is a courtesy. The refusal below is the point.
+  }
+  throw new BankrollError(CODE_NOT_INITIALIZED, MESSAGE_NOT_INITIALIZED);
 }
 
 // ---------------------------------------------------------------------------
@@ -282,6 +372,7 @@ export type SessionOptions = { identity?: boolean };
 // Cached and single-flighted; a fresh token is reused, and an identity-required
 // request reuses the cache only when the cached token is itself verified.
 async function session(options?: SessionOptions): Promise<string> {
+  await started(SESSION_METHOD);
   const identity = options?.identity === true;
   const call = resolveTokenCall(identity);
   if (
@@ -393,6 +484,7 @@ interface BridgePayload {
 // signature, which your server confirms with confirmCharge() before releasing
 // value.
 async function charge(input: ChargeInput): Promise<string> {
+  await started(PAY_METHOD);
   const bridge = requireBridge(PAY_METHOD);
   const { amountCents } = input;
   // Validate before the bridge, using the host's own wire message so a local
@@ -481,6 +573,7 @@ export type Balances = {
  * at client version 2+; older hosts reject with 'update_required'.
  */
 async function deposit(input?: DepositInput): Promise<void> {
+  await started(DEPOSIT_METHOD);
   const bridge = requireBridge(DEPOSIT_METHOD);
   try {
     return await bridge.deposit!(input);
@@ -497,6 +590,7 @@ async function deposit(input?: DepositInput): Promise<void> {
  * at client version 2+; older hosts reject with 'update_required'.
  */
 async function balances(): Promise<Balances> {
+  await started(BALANCES_METHOD);
   const bridge = requireBridge(BALANCES_METHOD);
   try {
     return await bridge.balances!();
@@ -532,12 +626,13 @@ export type HapticsInput = {
 /**
  * Fire the phone's haptic engine (Bankroll host at client version 4+).
  *
- * Decoration only — so unlike every other capability this NEVER rejects: in a
- * plain browser, under a host too old to have it, or on any bridge failure it
- * resolves having done nothing. Call it freely at the moments that deserve
- * weight; never gate anything on it.
+ * Decoration only — so unlike every other capability this NEVER rejects once
+ * init() has been called: in a plain browser, under a host too old to have it,
+ * or on any bridge failure it resolves having done nothing. Call it freely at
+ * the moments that deserve weight; never gate anything on it.
  */
 async function haptics(input?: HapticsInput): Promise<void> {
+  await started(HAPTICS_METHOD);
   if (status() !== STATUS_READY) return;
   const host = window.bankroll;
   if (!host || typeof host[HAPTICS_METHOD] !== 'function') return;
@@ -563,11 +658,13 @@ const PROMPT_REVIEW_METHOD = 'promptReview';
  * player sees it, so calling often is harmless. Your app gets nothing back:
  * this resolves with
  * no value as soon as the host has taken the request, whether or not a card
- * appears. Like haptics() it NEVER rejects — in a plain browser, under a host
- * too old to have it, or on any bridge failure it resolves having done
- * nothing. Verified apps only; an unverified app gets the same silent resolve.
+ * appears. Like haptics() it NEVER rejects once init() has been called — in a
+ * plain browser, under a host too old to have it, or on any bridge failure it
+ * resolves having done nothing. Verified apps only; an unverified app gets the
+ * same silent resolve.
  */
 async function promptReview(): Promise<void> {
+  await started(PROMPT_REVIEW_METHOD);
   if (status() !== STATUS_READY) return;
   const host = window.bankroll;
   if (!host || typeof host[PROMPT_REVIEW_METHOD] !== 'function') return;
@@ -583,6 +680,7 @@ async function promptReview(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export const bankroll = {
+  init,
   status,
   session,
   /** @deprecated Use {@link session}. */
@@ -646,6 +744,12 @@ declare global {
   interface Window {
     bankroll?: {
       version: string;
+      // A host that has it is told which SDK the page runs; feature-detected,
+      // since no Bankroll app before init() has it.
+      init?(input: { sdk: string }): Promise<void>;
+      // The simulator's bridge and the stand-in host: where this SDK says a
+      // call it refused before asking, for a simulator to show.
+      refused?(method: string, reason: string): void;
       // The newer host method; older hosts expose only identity(). The SDK
       // feature-detects both.
       session?(options?: { identity?: boolean }): Promise<string>;

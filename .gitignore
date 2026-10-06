@@ -7,3 +7,4 @@ dist/
 
 # Local secrets — the throwaway Blob token the conformance tests use.
 .env*.local
+.DS_Store
