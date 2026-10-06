@@ -16,7 +16,7 @@ import { confirmCharge, ConfirmChargeError } from './charges';
 import type { ConfirmChargeOptions, ConfirmedCharge } from './charges';
 import type { Json } from './matchmaking';
 import { record, snapshot } from './matchmaking-core';
-import { armMockExpiry, mockEnabled, mockReference } from './mock';
+import { armMockExpiry, isMockReference, mockEnabled, mockReference } from './mock';
 import { PayError } from './payouts';
 import { rpcUrl } from './rpc';
 
@@ -159,11 +159,12 @@ export async function findChargeByReference(
   reference: string,
   options?: FindChargeOptions,
 ): Promise<ConfirmedCharge | null> {
-  // The stand-in host settles nothing on-chain, so there is never anything to
-  // recover: answering "nothing found" keeps a sweep from reaching an RPC. In
-  // a simulator the payments are real to a local chain, and SOLANA_RPC_URL
-  // names it, so the chain is asked.
-  if (mockEnabled() && !process.env.SOLANA_RPC_URL) return null;
+  // The stand-in host settles nothing on-chain, so a reference it minted is
+  // never found there, and with no chain named nothing is: answering "nothing
+  // found" keeps a sweep from reaching an RPC. In a simulator the payments are
+  // real to a local chain, SOLANA_RPC_URL names it, and the references are
+  // real addresses, so the chain is asked.
+  if (mockEnabled() && (isMockReference(reference) || !process.env.SOLANA_RPC_URL)) return null;
 
   for (const entry of await historyOldestFirst(reference, options)) {
     if (entry.err) continue;
@@ -208,9 +209,10 @@ export async function findChargeByReference(
  * look is not a negative answer, and must never be treated as one.
  */
 export async function findPayoutByReference(reference: string): Promise<FoundPayout | null> {
-  // The stand-in host settles nothing on-chain, so there is never anything to
-  // find; a simulator's local chain, named by SOLANA_RPC_URL, is asked.
-  if (mockEnabled() && !process.env.SOLANA_RPC_URL) return null;
+  // The stand-in host settles nothing on-chain, so a reference it minted is
+  // never found there, and with no chain named nothing is; a simulator's local
+  // chain, named by SOLANA_RPC_URL, is asked for a real reference.
+  if (mockEnabled() && (isMockReference(reference) || !process.env.SOLANA_RPC_URL)) return null;
 
   let history: RpcSignature[];
   try {

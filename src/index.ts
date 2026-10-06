@@ -747,8 +747,8 @@ declare global {
       // A host that has it is told which SDK the page runs; feature-detected,
       // since no Bankroll app before init() has it.
       init?(input: { sdk: string }): Promise<void>;
-      // The stand-in host only: where this SDK says a call it refused before
-      // asking, for a simulator to show.
+      // The simulator's bridge and the stand-in host: where this SDK says a
+      // call it refused before asking, for a simulator to show.
       refused?(method: string, reason: string): void;
       // The newer host method; older hosts expose only identity(). The SDK
       // feature-detects both.

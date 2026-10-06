@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import bs58 from 'bs58';
 import { jwtVerify } from 'jose';
-import { parseMockReference } from '../src/mock';
+import { mockReference, parseMockReference } from '../src/mock';
 
 import { BASE_UNITS_PER_CENT, ConfirmChargeError, HSUSD_MINT } from '../src/charges';
 import { PayError } from '../src/payouts';
@@ -289,6 +289,11 @@ describe('findPayoutByReference', () => {
     process.env.SOLANA_RPC_URL = rpc;
     await findPayoutByReference(REFERENCE).catch(() => null);
     expect(server.requests.length).toBeGreaterThan(0);
+
+    // A reference the stand-in host minted is never on any chain, named or not.
+    const asked = server.requests.length;
+    await expect(findPayoutByReference(mockReference({ entryId: 'e1' }, '2026-09-18T18:07:00.000Z'))).resolves.toBeNull();
+    expect(server.requests.length).toBe(asked);
   });
 });
 describe('createManagedReference', () => {
