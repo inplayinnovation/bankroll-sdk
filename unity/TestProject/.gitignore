@@ -1,0 +1,9 @@
+# Unity's machine-local folders and generated IDE files.
+/Library/
+/Logs/
+/Temp/
+/UserSettings/
+/obj/
+*.csproj
+*.sln
+*.slnx

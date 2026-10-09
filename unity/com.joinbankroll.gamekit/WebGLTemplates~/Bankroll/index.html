@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>{{{ PRODUCT_NAME }}}</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: {{{ BANKROLL_BACKGROUND }}};
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #unity-canvas { display: block; width: 100%; height: 100%; background: {{{ BANKROLL_BACKGROUND }}}; outline: none; }
+  </style>
+</head>
+<body>
+  <canvas id="unity-canvas" tabindex="-1"></canvas>
+  <script>
+    // The page between a Bankroll game (Unity) and the Bankroll app that frames it in an iframe. It ships
+    // with the kit (WebGLTemplates~/Bankroll) and a build copies it into Assets/WebGLTemplates/Bankroll.
+    // BANKROLL_BACKGROUND is the game's own colour, a template setting in the game's Player settings.
+    // Game -> app: HostBridge.Send (C#) -> BankrollBridge.jslib -> bankrollBridge.send -> postMessage.
+    // App -> game: postMessage -> SendMessage('BankrollHost', 'OnHostMessage', json) -> HostBridge (C#).
+    (function () {
+      var host = window.parent !== window ? window.parent : null;
+      var instance = null;
+      var queued = [];
+
+      // Render at most 2 device pixels per CSS pixel: a 3x phone screen costs WebGL a lot for little gain.
+      var pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+
+      function post(type, payload) {
+        if (host) host.postMessage({ source: 'bankroll-game', type: type, payload: payload }, window.location.origin);
+      }
+
+      window.bankrollBridge = {
+        send: function (type, json) {
+          var payload = null;
+          if (json) {
+            try { payload = JSON.parse(json); } catch (error) { payload = json; }
+          }
+          post(type, payload);
+        },
+        // For the app's development tools: the size of the game's WebAssembly memory, which is what a
+        // phone's WebView runs out of first.
+        diagnostics: function () {
+          var module = instance && instance.Module;
+          var heapBytes = null;
+          if (module && module.HEAPU8) heapBytes = module.HEAPU8.length;
+          else if (module && module.wasmMemory) heapBytes = module.wasmMemory.buffer.byteLength;
+          return { heapBytes: heapBytes };
+        },
+      };
+
+      function deliver(type, payload) {
+        if (type === 'safe_area' && payload) {
+          // The app measures CSS pixels; the game works in the canvas's device pixels.
+          payload = {
+            top: (payload.top || 0) * pixelRatio,
+            right: (payload.right || 0) * pixelRatio,
+            bottom: (payload.bottom || 0) * pixelRatio,
+            left: (payload.left || 0) * pixelRatio,
+          };
+        }
+        var json = JSON.stringify({ type: type, payload: payload == null ? '' : JSON.stringify(payload) });
+        if (instance) instance.SendMessage('BankrollHost', 'OnHostMessage', json);
+        else queued.push(json);
+      }
+
+      window.addEventListener('message', function (event) {
+        if (!host || event.source !== host || event.origin !== window.location.origin) return;
+        var data = event.data;
+        if (!data || data.source !== 'bankroll-app' || typeof data.type !== 'string') return;
+        deliver(data.type, data.payload);
+      });
+
+      // Leaving the app hides the page, and the browser then stops the game loop. SendMessage runs the game's
+      // code right away, so the round is paused before that happens.
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'hidden') deliver('pause', null);
+      });
+
+      var config = {
+        dataUrl: 'Build/{{{ DATA_FILENAME }}}',
+        frameworkUrl: 'Build/{{{ FRAMEWORK_FILENAME }}}',
+        codeUrl: 'Build/{{{ CODE_FILENAME }}}',
+#if MEMORY_FILENAME
+        memoryUrl: 'Build/{{{ MEMORY_FILENAME }}}',
+#endif
+#if SYMBOLS_FILENAME
+        symbolsUrl: 'Build/{{{ SYMBOLS_FILENAME }}}',
+#endif
+        streamingAssetsUrl: 'StreamingAssets',
+        companyName: {{{ JSON.stringify(COMPANY_NAME) }}},
+        productName: {{{ JSON.stringify(PRODUCT_NAME) }}},
+        productVersion: {{{ JSON.stringify(PRODUCT_VERSION) }}},
+        matchWebGLToCanvasSize: true,
+        devicePixelRatio: pixelRatio,
+      };
+
+      post('loading', { progress: 0 });
+      var loader = document.createElement('script');
+      loader.src = 'Build/{{{ LOADER_FILENAME }}}';
+      loader.onload = function () {
+        createUnityInstance(document.getElementById('unity-canvas'), config, function (progress) {
+          post('loading', { progress: progress });
+        }).then(function (unityInstance) {
+          instance = unityInstance;
+          queued.splice(0).forEach(function (json) { instance.SendMessage('BankrollHost', 'OnHostMessage', json); });
+        }).catch(function (error) {
+          post('error', { message: String(error) });
+        });
+      };
+      loader.onerror = function () { post('error', { message: 'The game could not be downloaded.' }); };
+      document.body.appendChild(loader);
+    })();
+  </script>
+</body>
+</html>

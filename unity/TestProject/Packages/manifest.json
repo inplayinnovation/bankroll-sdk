@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "com.joinbankroll.gamekit": "file:../../com.joinbankroll.gamekit",
+    "com.unity.test-framework": "1.6.0"
+  },
+  "testables": ["com.joinbankroll.gamekit"]
+}
