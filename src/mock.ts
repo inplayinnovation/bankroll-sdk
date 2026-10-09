@@ -54,7 +54,7 @@ const DEFAULT_AGE = 30;
 const DEFAULT_CASH_CENTS = 100_000;
 
 export interface MockUser {
-  /** The pretend user's wallet address. */
+  /** The test user's wallet address. */
   wallet?: string;
   username?: string;
   /**
@@ -73,7 +73,7 @@ export interface MockHostOptions extends MockUser {
    * app and fails for any other — the same check a real payment faces.
    */
   payee: string;
-  /** The pretend cash balance, in cents. */
+  /** The test cash balance, in cents. */
   cashCents?: number;
 }
 

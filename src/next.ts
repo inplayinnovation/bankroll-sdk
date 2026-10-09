@@ -218,7 +218,7 @@ export function manifestRoute(app: ManifestApp): (request?: Request) => Promise<
  * The stand-in host for a browser. Render it in the layout the app's pages
  * share, and with BANKROLL_MOCK=1 outside production the page gets the
  * `window.bankroll` the Bankroll app would have injected: the app runs in any
- * browser tab as a pretend user.
+ * browser tab as a test user.
  *
  *   <MockHost payee={payeeAddress() ?? ''} />
  *
