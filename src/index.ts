@@ -679,6 +679,48 @@ async function promptReview(): Promise<void> {
 // Public surface
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Back to the Bankroll app
+// ---------------------------------------------------------------------------
+
+const CLOSE_METHOD = 'close';
+
+/**
+ * Whether close() has anything to do here: the page is inside a Bankroll
+ * host that can take the player back to the Bankroll app. Synchronous and
+ * fixed for the page's life, so a "Back to Bankroll" button can be shown or
+ * left out at render time. False in a plain browser and under a host that
+ * predates the method.
+ */
+function canClose(): boolean {
+  if (status() !== STATUS_READY) return false;
+  const host = typeof window === 'undefined' ? undefined : window.bankroll;
+  return typeof host?.[CLOSE_METHOD] === 'function';
+}
+
+/**
+ * Take the player back to the Bankroll app: the host leaves the page and
+ * returns to where the app was opened from, the way its own Exit does. For a
+ * button of the app's own, so a player is not sent looking for the host's
+ * menu.
+ *
+ * Resolves true once the host has taken the request, and false where there is
+ * nothing to do: a plain browser, or a host too old to have it. It never
+ * rejects once init() has been called. Show the button only when canClose()
+ * says so.
+ */
+async function close(): Promise<boolean> {
+  await started(CLOSE_METHOD);
+  if (!canClose()) return false;
+  try {
+    await window.bankroll!.close!();
+    return true;
+  } catch {
+    // The host would not leave the page; the player still has its menu.
+    return false;
+  }
+}
+
 export const bankroll = {
   init,
   status,
@@ -690,6 +732,8 @@ export const bankroll = {
   deposit,
   haptics,
   promptReview,
+  canClose,
+  close,
 };
 
 // Canonical fetch decorator: attaches the session token on every request when
@@ -780,6 +824,9 @@ declare global {
       // Ask for the host's thumbs card; feature-detected. Resolves with
       // nothing once the host has taken the request.
       promptReview?(): Promise<void>;
+      // Leave the page for the Bankroll app; feature-detected. Resolves once
+      // the host has taken the request.
+      close?(): Promise<void>;
     };
     // Legacy marker set by older Bankroll app builds — a presence-only signal
     // used to tell an out-of-date app apart from a standalone browser.

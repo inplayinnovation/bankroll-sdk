@@ -25,6 +25,7 @@ type BridgeShape = {
   deposit?: unknown;
   haptics?: unknown;
   promptReview?: unknown;
+  close?: unknown;
 };
 
 function setBridge(bridge: BridgeShape): void {
@@ -715,6 +716,37 @@ describe('haptics', () => {
     setBridge({ version: '4', identity: vi.fn(), pay: vi.fn(), haptics: hapticsFn });
     const { bankroll } = await load();
     await expect(bankroll.haptics()).resolves.toBeUndefined();
+  });
+});
+
+describe('close', () => {
+  it('has nothing to do with no host at all, and says so without rejecting', async () => {
+    const { bankroll } = await load();
+    expect(bankroll.canClose()).toBe(false);
+    await expect(bankroll.close()).resolves.toBe(false);
+  });
+
+  it('has nothing to do on a host without the method', async () => {
+    setBridge({ version: '4', identity: vi.fn(), pay: vi.fn() });
+    const { bankroll } = await load();
+    expect(bankroll.canClose()).toBe(false);
+    await expect(bankroll.close()).resolves.toBe(false);
+  });
+
+  it('asks a current host to leave the page, and says it did', async () => {
+    const closeFn = vi.fn().mockResolvedValue(undefined);
+    setBridge({ version: '5', identity: vi.fn(), pay: vi.fn(), close: closeFn });
+    const { bankroll } = await load();
+    expect(bankroll.canClose()).toBe(true);
+    await expect(bankroll.close()).resolves.toBe(true);
+    expect(closeFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves false, never rejects, when the host refuses', async () => {
+    const closeFn = vi.fn().mockRejectedValue(new Error('stay'));
+    setBridge({ version: '5', identity: vi.fn(), pay: vi.fn(), close: closeFn });
+    const { bankroll } = await load();
+    await expect(bankroll.close()).resolves.toBe(false);
   });
 });
 
