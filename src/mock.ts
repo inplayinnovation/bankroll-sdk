@@ -42,7 +42,15 @@ const MOCK_HOST_VERSION = '4';
 const TOKEN_TTL_SECONDS = 3600;
 const MS_PER_SECOND = 1000;
 
-export const MOCK_WALLET = 'MockWa11et11111111111111111111111111111111';
+/**
+ * The test user's wallet: a valid Solana address, because the payout path
+ * checks every recipient the way it always does, mock signer or not, and an
+ * address that does not decode would make every payout to the test user
+ * throw. It is off the ed25519 curve, so no private key for it exists: the
+ * program-derived address of the seed "bankroll mock wallet" under the System
+ * Program, which anyone can recompute.
+ */
+export const MOCK_WALLET = 'EE7KPsvdguwMrnpMBNgbwMkqnjTnFw2Mb2ZKZaRyxrYX';
 /**
  * The player the mock's matchmaking pairs a lone ticket with after a few
  * seconds, so one tester sees a match. It never plays; the app resolves the

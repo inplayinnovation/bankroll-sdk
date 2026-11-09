@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PublicKey, SystemProgram } from '@solana/web3.js';
 
 import { confirmCharge, ConfirmChargeError } from '../src/charges';
 import { BANKROLL_TOKEN_HEADER } from '../src/constants';
@@ -135,6 +136,18 @@ describe('mock payouts', () => {
     // Still refuses what every build refuses.
     await expect(buildPayout({ to: 'nope', amountCents: 1 }, { signer: mockPayoutSigner(PAYEE) })).rejects.toThrow(/not a valid address/);
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it('pays the default test user: the mock wallet is a valid address with no key behind it', async () => {
+    vi.stubEnv('BANKROLL_MOCK', '1');
+    vi.stubEnv('NODE_ENV', 'test');
+    const wallet = new PublicKey(MOCK_WALLET);
+    expect(PublicKey.isOnCurve(wallet.toBytes())).toBe(false);
+    const [derived] = PublicKey.findProgramAddressSync([Buffer.from('bankroll mock wallet')], SystemProgram.programId);
+    expect(derived.toBase58()).toBe(MOCK_WALLET);
+    const built = await buildPayout({ to: MOCK_WALLET, amountCents: 180 }, { signer: mockPayoutSigner(PAYEE) });
+    expect(built.blockhash).toBe(MOCK_BLOCKHASH);
     vi.unstubAllEnvs();
   });
 
