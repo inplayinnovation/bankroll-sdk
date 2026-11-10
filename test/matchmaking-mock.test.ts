@@ -51,6 +51,24 @@ describe('mock matchmaking', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('gives the joining ticket the waiting ticket\'s payload, as the service does, and keeps its own proposal in the input', async () => {
+    await mm().createTicket(entry('a', 'alice'));
+    const joined = await mm().createTicket(entry('b', 'bob', { payload: { target: 9 } }));
+    expect(joined.state).toBe('matched');
+    if (joined.state !== 'matched') return;
+    // What bob asked for stays as sent; what bob plays is alice's round.
+    expect(joined.admission.input.payload).toEqual({ target: 9 });
+    expect(joined.admission.payload).toEqual({ target: 7 });
+    expect(joined.match.tickets.map((t) => t.payload)).toEqual([{ target: 7 }, { target: 7 }]);
+    // The stored ticket says the same on every later read, and a retry is still the same ticket.
+    const stored = (await mm().listTickets({ id: 'b' })).tickets[0]!;
+    expect(stored.state === 'matched' && stored.admission.payload).toEqual({ target: 7 });
+    const retry = await mm().createTicket(entry('b', 'bob', { payload: { target: 9 } }));
+    expect(retry.state === 'matched' && retry.admission.payload).toEqual({ target: 7 });
+    const alice = (await mm().listTickets({ id: 'a' })).tickets[0]!;
+    expect(alice.state === 'matched' && alice.match.tickets[1].payload).toEqual({ target: 7 });
+  });
+
   it('never pairs a player with themselves, and matches the oldest compatible ticket first', async () => {
     await mm().createTicket(entry('a1', 'alice'));
     vi.setSystemTime(START + 10);

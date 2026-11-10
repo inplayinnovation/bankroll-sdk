@@ -144,6 +144,9 @@ function createTicket(raw: unknown): Ticket {
       stored.state === 'waiting' && stored.admission.input.queue.key === input.queue.key && compatible(stored.admission, input, now))
     .sort((a, b) => a.admission.createdAt - b.admission.createdAt || a.order - b.order);
   const waiting = candidates[0];
+  // A joining ticket plays the waiting ticket's payload, as the service does:
+  // its own proposal stays in `input.payload`.
+  if (waiting) admission.payload = waiting.admission.payload;
   const stored: Stored = waiting
     ? { id: input.id, state: 'matched', admission, match: pair(waiting, admission, now), order: admitted++ }
     : { id: input.id, state: 'waiting', admission, order: admitted++ };
