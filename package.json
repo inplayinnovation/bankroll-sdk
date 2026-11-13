@@ -57,6 +57,11 @@
       "import": "./dist/react.js",
       "default": "./dist/react.js"
     },
+    "./game": {
+      "types": "./dist/game.d.ts",
+      "import": "./dist/game.js",
+      "default": "./dist/game.js"
+    },
     "./mock": {
       "types": "./dist/mock.d.ts",
       "import": "./dist/mock.js",
@@ -81,11 +86,17 @@
       "types": "./dist/restrictions.d.ts",
       "import": "./dist/restrictions.js",
       "default": "./dist/restrictions.js"
+    },
+    "./game-core": {
+      "types": "./dist/game-core.d.ts",
+      "import": "./dist/game-core.js",
+      "default": "./dist/game-core.js"
     }
   },
   "scripts": {
     "build": "tsup && node scripts/verify-build.mjs",
     "prepack": "npm run build",
+    "prepare": "npm run build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

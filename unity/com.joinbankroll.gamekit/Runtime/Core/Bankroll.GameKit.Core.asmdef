@@ -1,0 +1,14 @@
+{
+    "name": "Bankroll.GameKit.Core",
+    "rootNamespace": "Bankroll.GameKit.Core",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}
