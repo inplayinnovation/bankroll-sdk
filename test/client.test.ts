@@ -295,7 +295,7 @@ describe('status in a simulator', () => {
     await starting;
     await Promise.resolve();
     expect(calls()).toHaveLength(2);
-    expect(calls()[1]).toEqual({ bankroll: 'simulator', type: 'call', id: 2, feature: 'bankroll:pay', input: { amountCents: 500, idempotencyKey: 'once' }, at: expect.any(Number) });
+    expect(calls()[1]).toEqual({ bankroll: 'simulator', type: 'call', id: 2, feature: 'bankroll:pay', input: { acceptsCredits: true, amountCents: 500, idempotencyKey: 'once' }, at: expect.any(Number) });
     hear({ bankroll: 'simulator', type: 'result', id: 2, ok: false, error: 'insufficient_funds' });
     await expect(charging).rejects.toMatchObject({ code: 'insufficient_funds' });
   });
@@ -523,6 +523,14 @@ describe('pay bridge payload', () => {
     const { bankroll } = await load();
     await bankroll.charge({ amountCents: 100, memo: '   ' });
     expect('memo' in payPayload(payMock)).toBe(false);
+  });
+
+  it('tells the host that the app reads a charge paid with Bankroll Credits', async () => {
+    const payMock = vi.fn().mockResolvedValue('sig');
+    setBridge({ version: '1', identity: vi.fn(), pay: payMock });
+    const { bankroll } = await load();
+    await bankroll.charge({ amountCents: 100 });
+    expect((payMock.mock.calls[0]![0] as { acceptsCredits?: boolean }).acceptsCredits).toBe(true);
   });
 
   it('omits the memo entirely when none is supplied', async () => {

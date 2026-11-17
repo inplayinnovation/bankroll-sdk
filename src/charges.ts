@@ -25,6 +25,14 @@ export const HSUSD_MINT = appEnvironment() === APP_ENVIRONMENT.test ? TEST_CASH_
 export const HSUSD_DECIMALS = 9;
 /** Payments are denominated in whole US cents; HSUSD has 9 decimals. */
 export const BASE_UNITS_PER_CENT = 10n ** 7n;
+/**
+ * Coinflow's vault for Bankroll Credits. Credits are money a person bought by
+ * card. Coinflow holds it here, and a payment with credits moves it from the
+ * vault, through the person's own token account, to the payee, all in one
+ * transaction. So the vault is debited for the credits part of a charge and
+ * the person only for the cash part, which is nothing when credits paid it all.
+ */
+export const CREDITS_VAULT = 'G5XzJctzwbEpLLwQ6TD6LpWN4YEYoNTGbDi63EKJbmjx';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 // A payment the user just watched settle can be missing from the queried
@@ -62,7 +70,11 @@ export interface ConfirmedCharge {
    * findChargeByReference(), where the signature is the thing you didn't have.
    */
   signature: string;
-  /** Wallet the funds left. Compare to your verified session's `user.wallet`. */
+  /**
+   * Wallet that paid. Compare to your verified session's `user.wallet`. For a
+   * charge paid with Bankroll Credits this is still the person: the credits
+   * leave Coinflow's vault, and the person signs for them.
+   */
   payer: string;
   /** Wallet the funds arrived at. Compare to your `capabilities.payments` address. */
   payee: string;
@@ -121,7 +133,10 @@ interface RpcTransaction {
     innerInstructions?: Array<{ instructions: RpcInstruction[] }>;
   } | null;
   transaction: {
-    message: { instructions: RpcInstruction[] };
+    message: {
+      accountKeys?: Array<string | { pubkey: string; signer?: boolean }>;
+      instructions: RpcInstruction[];
+    };
   };
 }
 
@@ -212,6 +227,21 @@ function extractMemo(parsed: RpcTransaction): string | null {
   return null;
 }
 
+// A charge paid only with Bankroll Credits debits no account of the person:
+// the vault pays into the person's token account and the charge spends it in
+// the same transaction. The person is then the signer whose account for this
+// mint is in the transaction with no net change. Exactly one must match, so a
+// transaction that carries a second such account names nobody.
+function creditsPayer(parsed: RpcTransaction, deltas: Map<string, bigint>): string | undefined {
+  const signers = new Set(
+    (parsed.transaction.message.accountKeys ?? []).flatMap((key) =>
+      typeof key === 'object' && key.signer ? [key.pubkey] : [],
+    ),
+  );
+  const carriers = [...deltas].filter(([owner, delta]) => delta === 0n && signers.has(owner));
+  return carriers.length === 1 ? carriers[0]![0] : undefined;
+}
+
 /**
  * Fetches the settled charge `tx` (the signature `bankroll.charge()` resolved
  * with) from your Solana RPC (SOLANA_RPC_URL, or the rate-limited public
@@ -298,9 +328,19 @@ export async function confirmCharge(
 
   const credits = [...deltas].filter(([, delta]) => delta > 0n);
   const debits = [...deltas].filter(([, delta]) => delta < 0n);
+  // Bankroll Credits leave Coinflow's vault, so the vault is never the payer.
+  // The person is the one other wallet debited (the cash part of the charge),
+  // or, when credits paid it all, the signer the credits passed through.
+  const wallets = debits.filter(([owner]) => owner !== CREDITS_VAULT);
+  const paidWithCredits = wallets.length < debits.length;
   const credit = credits[0];
-  const debit = debits[0];
-  if (credits.length !== 1 || debits.length !== 1 || !credit || !debit) {
+  const payer =
+    wallets.length === 1
+      ? wallets[0]![0]
+      : wallets.length === 0 && paidWithCredits
+        ? creditsPayer(parsed, deltas)
+        : undefined;
+  if (credits.length !== 1 || !credit || !payer) {
     throw new ConfirmChargeError(
       'not_a_payment',
       `transaction ${tx} is not a single ${mint} payer→payee transfer ` +
@@ -313,7 +353,7 @@ export async function confirmCharge(
   const units = credit[1];
   return {
     signature: tx,
-    payer: debit[0],
+    payer,
     payee: credit[0],
     mint,
     amountCents:

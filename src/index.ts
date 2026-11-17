@@ -472,6 +472,7 @@ export type ChargeInput = {
 };
 
 interface BridgePayload {
+  acceptsCredits: true;
   amountCents: number;
   expiresInSeconds?: number;
   idempotencyKey: string;
@@ -495,6 +496,11 @@ async function charge(input: ChargeInput): Promise<string> {
   // idempotencyKey is always sent so a retried charge can be recognised as the
   // same one.
   const payload: BridgePayload = {
+    // This SDK's confirmCharge() names the person as the payer of a charge
+    // paid with Bankroll Credits. An SDK before 0.35.0 names Coinflow's vault,
+    // and the app then refuses a charge that settled. So the Bankroll app adds
+    // credits to a charge only when it sees this.
+    acceptsCredits: true,
     amountCents,
     idempotencyKey: input.idempotencyKey ?? crypto.randomUUID(),
   };
@@ -800,6 +806,8 @@ declare global {
       /** @deprecated Older hosts expose this; session() supersedes it. */
       identity?(): Promise<string>;
       pay(input: {
+        // Since 0.35.0: this app reads a charge paid with Bankroll Credits.
+        acceptsCredits?: boolean;
         amountCents: number;
         // Host version 3+: refuses the charge if approval takes longer.
         expiresInSeconds?: number;

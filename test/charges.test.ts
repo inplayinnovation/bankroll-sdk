@@ -8,6 +8,7 @@ import { MOCK_WALLET } from '../src/mock';
 
 import {
   BASE_UNITS_PER_CENT,
+  CREDITS_VAULT,
   ConfirmChargeError,
   HSUSD_MINT,
   confirmCharge,
@@ -32,6 +33,7 @@ interface TxInput {
   post?: TokenBalanceInput[];
   memo?: string;
   meta?: null;
+  signers?: string[];
 }
 
 // The slice of a jsonParsed getTransaction result confirmCharge reads, shaped
@@ -65,7 +67,12 @@ function paymentTx(input: TxInput = {}): object {
     transaction: {
       signatures: [SIGNATURE],
       message: {
-        accountKeys: [],
+        accountKeys: (input.signers ?? []).map((pubkey) => ({
+          pubkey,
+          signer: true,
+          source: 'transaction',
+          writable: true,
+        })),
         instructions: [
           {
             program: 'spl-token',
@@ -294,6 +301,128 @@ describe('confirmCharge', () => {
 
     expect(payment.amountCents).not.toBe(500);
     expect(payment.amountCents).toBeCloseTo(500.0000001, 10);
+  });
+
+  describe('Bankroll Credits', () => {
+    const COINFLOW_FEE_PAYER = 'CoinflowFeePayer111111111111111111111111111';
+    const BYSTANDER = 'BystanderWa11et1111111111111111111111111111';
+
+    it('names the person as the payer when credits paid the whole charge', async () => {
+      await serve([
+        rpcResult(
+          paymentTx({
+            pre: [
+              { owner: CREDITS_VAULT, amount: cents(90_000) },
+              { owner: PAYER, amount: cents(250) },
+              { owner: PAYEE, amount: '0' },
+            ],
+            post: [
+              { owner: CREDITS_VAULT, amount: cents(89_500) },
+              { owner: PAYER, amount: cents(250) },
+              { owner: PAYEE, amount: cents(500) },
+            ],
+            signers: [COINFLOW_FEE_PAYER, PAYER],
+          }),
+        ),
+      ]);
+
+      const payment = await confirmCharge(SIGNATURE);
+
+      expect(payment.payer).toBe(PAYER);
+      expect(payment.payee).toBe(PAYEE);
+      expect(payment.amountCents).toBe(500);
+    });
+
+    it('names the person and the whole amount when credits paid a part', async () => {
+      await serve([
+        rpcResult(
+          paymentTx({
+            pre: [
+              { owner: CREDITS_VAULT, amount: cents(90_000) },
+              { owner: PAYER, amount: cents(250) },
+              { owner: PAYEE, amount: '0' },
+            ],
+            post: [
+              { owner: CREDITS_VAULT, amount: cents(89_700) },
+              { owner: PAYER, amount: cents(50) },
+              { owner: PAYEE, amount: cents(500) },
+            ],
+            signers: [COINFLOW_FEE_PAYER, PAYER],
+          }),
+        ),
+      ]);
+
+      const payment = await confirmCharge(SIGNATURE);
+
+      expect(payment.payer).toBe(PAYER);
+      expect(payment.amountCents).toBe(500);
+    });
+
+    it('refuses a charge paid by the vault alone when the person did not sign', async () => {
+      await serve([
+        rpcResult(
+          paymentTx({
+            pre: [
+              { owner: CREDITS_VAULT, amount: cents(90_000) },
+              { owner: PAYER, amount: cents(250) },
+              { owner: PAYEE, amount: '0' },
+            ],
+            post: [
+              { owner: CREDITS_VAULT, amount: cents(89_500) },
+              { owner: PAYER, amount: cents(250) },
+              { owner: PAYEE, amount: cents(500) },
+            ],
+            signers: [COINFLOW_FEE_PAYER],
+          }),
+        ),
+      ]);
+
+      await expect(confirmCharge(SIGNATURE)).rejects.toMatchObject({ code: 'not_a_payment' });
+    });
+
+    it('refuses a charge paid by the vault alone when two signers carry the asset', async () => {
+      await serve([
+        rpcResult(
+          paymentTx({
+            pre: [
+              { owner: CREDITS_VAULT, amount: cents(90_000) },
+              { owner: PAYER, amount: cents(250) },
+              { owner: BYSTANDER, amount: cents(10) },
+              { owner: PAYEE, amount: '0' },
+            ],
+            post: [
+              { owner: CREDITS_VAULT, amount: cents(89_500) },
+              { owner: PAYER, amount: cents(250) },
+              { owner: BYSTANDER, amount: cents(10) },
+              { owner: PAYEE, amount: cents(500) },
+            ],
+            signers: [COINFLOW_FEE_PAYER, PAYER, BYSTANDER],
+          }),
+        ),
+      ]);
+
+      await expect(confirmCharge(SIGNATURE)).rejects.toMatchObject({ code: 'not_a_payment' });
+    });
+
+    it('never names the vault as the payer of a plain transfer out of it', async () => {
+      await serve([
+        rpcResult(
+          paymentTx({
+            pre: [
+              { owner: CREDITS_VAULT, amount: cents(90_000) },
+              { owner: PAYEE, amount: '0' },
+            ],
+            post: [
+              { owner: CREDITS_VAULT, amount: cents(89_500) },
+              { owner: PAYEE, amount: cents(500) },
+            ],
+            signers: [COINFLOW_FEE_PAYER],
+          }),
+        ),
+      ]);
+
+      await expect(confirmCharge(SIGNATURE)).rejects.toMatchObject({ code: 'not_a_payment' });
+    });
   });
 
   describe('visibility polling', () => {
