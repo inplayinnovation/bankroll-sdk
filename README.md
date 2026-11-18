@@ -9,7 +9,7 @@ npm install @joinbankroll/sdk
 ```ts
 import { bankroll } from '@joinbankroll/sdk'
 
-bankroll.init()                      // once, first, in the browser: every call below but status() fails without it
+bankroll.init()                      // once, in the browser, when the page loads: it starts the SDK
 bankroll.status()                    // 'unavailable' | 'update_required' | 'ready' — sync, SSR-safe
 await bankroll.session()             // the session token, scoped to your origin
 await bankroll.session({ identity: true }) // ...resolving only for a verified real person
@@ -19,8 +19,10 @@ await bankroll.charge({ amountCents: 500 })  // charge $5.00 to your payment add
 `init()` goes at the top of a client module every page loads (in Next, a file
 with `'use client'`), not in a component and not in a server file: code there
 never runs in the browser. It tells the Bankroll app which SDK the page runs,
-never rejects, and does nothing during a server render. A call made before it
-rejects with `not_initialized`; one made while it is still running waits for it.
+never rejects, and does nothing during a server render. A call made while it is
+still running waits for it. An app that never calls it is started by its first
+other call (from 0.33.0 to 0.35.0 that call rejected with `not_initialized`).
+Call it at load all the same: a simulator then hears of the page at once.
 
 ```ts
 import { verifyToken, confirmCharge, pay } from '@joinbankroll/sdk/server'

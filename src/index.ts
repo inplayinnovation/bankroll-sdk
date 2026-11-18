@@ -103,6 +103,9 @@ const CODE_MANIFEST_ERROR = 'manifest_error';
 const CODE_IDEMPOTENCY_CONFLICT = 'idempotency_conflict';
 const CODE_PAYMENT_DENIED = 'payment_denied';
 const CODE_CHARGE_EXPIRED = 'charge_expired';
+// The SDK gave this code from 0.33.0 to 0.35.0, to a call made before init().
+// It gives it no more. It stays in the union, so an app that names it in a
+// comparison still compiles.
 const CODE_NOT_INITIALIZED = 'not_initialized';
 const CODE_UNKNOWN = 'unknown';
 
@@ -142,8 +145,6 @@ export class BankrollError extends Error {
 
 const MESSAGE_UNAVAILABLE = 'Bankroll is not available in this environment';
 const MESSAGE_UPDATE_REQUIRED = 'the Bankroll app must be updated to use this feature';
-const MESSAGE_NOT_INITIALIZED =
-  'bankroll.init() has not been called. Call it once, before any other call, in code that runs in the browser: a client module, not a server one.';
 
 const STATUS_ERROR_MESSAGE: Record<
   typeof STATUS_UNAVAILABLE | typeof STATUS_UPDATE_REQUIRED,
@@ -218,7 +219,6 @@ function requireBridge(
 // ---------------------------------------------------------------------------
 
 const INIT_METHOD = 'init';
-const SESSION_METHOD = 'session';
 
 /**
  * What an app passes to init(). There is nothing to pass yet: this is where an
@@ -246,9 +246,8 @@ async function introduce(): Promise<void> {
 }
 
 /**
- * Start the SDK. Call it once, before any other call, in code that runs in the
- * browser. Every call but status() fails with `not_initialized` if init() was
- * never called; a call made while init() is still running waits for it.
+ * Start the SDK. Call it once, in code that runs in the browser, when the page
+ * loads. A call made while init() is still running waits for it.
  *
  *   bankroll.init();   // at the top of a client module every page loads
  *
@@ -256,6 +255,11 @@ async function introduce(): Promise<void> {
  * new enough to be told. It never rejects, and calling it again is harmless:
  * the first call is the one that counts. During a server render it does
  * nothing, so a module that calls it can be rendered on the server.
+ *
+ * An app that never calls it is started by its first other call. From 0.33.0
+ * to 0.35.0 such a call failed with `not_initialized`. Calling init() at load
+ * is still the better start: a simulator hears of the page at once, and not at
+ * the page's first call.
  */
 function init(options?: InitOptions): Promise<void> {
   // Nothing to read from them yet.
@@ -264,25 +268,17 @@ function init(options?: InitOptions): Promise<void> {
   return initialized;
 }
 
-// Where every call to the host begins. A call before init() was ever called is
-// a mistake in the app, said plainly and at once. One made while init() is
-// still running waits for it.
+// Where every call to the host begins: the call waits for init(). An app that
+// never called init() is started here, by this call.
 //
-// The host never hears a call that is refused here, and an app that catches
-// the error hears nothing either: a balance that will not load, and no reason
-// given. So the bridge is told, and passes it on to the simulator as a call
-// that failed. `method` is the host's name for the call.
-function started(method: string): Promise<void> {
-  if (initialized !== null) return initialized;
-  try {
-    if (typeof window !== 'undefined') {
-      installBridge();
-      window.bankroll?.refused?.(method, MESSAGE_NOT_INITIALIZED);
-    }
-  } catch {
-    // Telling is a courtesy. The refusal below is the point.
-  }
-  throw new BankrollError(CODE_NOT_INITIALIZED, MESSAGE_NOT_INITIALIZED);
+// Until 0.35.1 such a call was refused with `not_initialized`. That stopped an
+// app whose SDK moved up from before init() existed (0.33.0) with no change to
+// its code, and that is what an update of the SDK's version alone does: the
+// one Bankroll makes to an app, and a plain `npm install` of a newer version.
+// No host needs the refusal: init() tells the host the SDK's version, and the
+// host is told before the call goes on either way.
+function started(): Promise<void> {
+  return init();
 }
 
 // ---------------------------------------------------------------------------
@@ -372,7 +368,7 @@ export type SessionOptions = { identity?: boolean };
 // Cached and single-flighted; a fresh token is reused, and an identity-required
 // request reuses the cache only when the cached token is itself verified.
 async function session(options?: SessionOptions): Promise<string> {
-  await started(SESSION_METHOD);
+  await started();
   const identity = options?.identity === true;
   const call = resolveTokenCall(identity);
   if (
@@ -485,7 +481,7 @@ interface BridgePayload {
 // signature, which your server confirms with confirmCharge() before releasing
 // value.
 async function charge(input: ChargeInput): Promise<string> {
-  await started(PAY_METHOD);
+  await started();
   const bridge = requireBridge(PAY_METHOD);
   const { amountCents } = input;
   // Validate before the bridge, using the host's own wire message so a local
@@ -562,7 +558,13 @@ export type AppTokenBalance = {
 export type Balances = {
   /** The user's cash (HSUSD), in whole US cents. */
   cashCents: number;
-  /** Credits registered to this app, in whole US cents. */
+  /**
+   * The user's Bankroll Credits, in whole US cents: money bought by card in
+   * the Bankroll app. A charge pays with credits first and with cash for the
+   * rest, so what a charge can use is cashCents + creditsCents. It is 0 where
+   * credits cannot pay: an app that Bankroll did not verify, and a test
+   * version of an app.
+   */
   creditsCents: number;
   /**
    * Balances of every token this app's manifest declares, keyed by mint
@@ -579,7 +581,7 @@ export type Balances = {
  * at client version 2+; older hosts reject with 'update_required'.
  */
 async function deposit(input?: DepositInput): Promise<void> {
-  await started(DEPOSIT_METHOD);
+  await started();
   const bridge = requireBridge(DEPOSIT_METHOD);
   try {
     return await bridge.deposit!(input);
@@ -596,7 +598,7 @@ async function deposit(input?: DepositInput): Promise<void> {
  * at client version 2+; older hosts reject with 'update_required'.
  */
 async function balances(): Promise<Balances> {
-  await started(BALANCES_METHOD);
+  await started();
   const bridge = requireBridge(BALANCES_METHOD);
   try {
     return await bridge.balances!();
@@ -638,7 +640,7 @@ export type HapticsInput = {
  * the moments that deserve weight; never gate anything on it.
  */
 async function haptics(input?: HapticsInput): Promise<void> {
-  await started(HAPTICS_METHOD);
+  await started();
   if (status() !== STATUS_READY) return;
   const host = window.bankroll;
   if (!host || typeof host[HAPTICS_METHOD] !== 'function') return;
@@ -670,7 +672,7 @@ const PROMPT_REVIEW_METHOD = 'promptReview';
  * same silent resolve.
  */
 async function promptReview(): Promise<void> {
-  await started(PROMPT_REVIEW_METHOD);
+  await started();
   if (status() !== STATUS_READY) return;
   const host = window.bankroll;
   if (!host || typeof host[PROMPT_REVIEW_METHOD] !== 'function') return;
@@ -716,7 +718,7 @@ function canClose(): boolean {
  * says so.
  */
 async function close(): Promise<boolean> {
-  await started(CLOSE_METHOD);
+  await started();
   if (!canClose()) return false;
   try {
     await window.bankroll!.close!();
