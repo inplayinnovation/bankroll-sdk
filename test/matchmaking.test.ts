@@ -62,6 +62,23 @@ describe('matchmaking app authentication and transport', () => {
     }
   });
 
+  it('sends a join path as the caller wrote it and reads it back on the ticket', async () => {
+    // The client reads nothing in the path and changes nothing: a retry must match what was sent.
+    const withPath = { ...input, joinPath: "/duel?name=O'Brien&entry=5" };
+    const reply = { id: input.id, state: 'waiting', admission: { ...admission, input: withPath } };
+    fetchMock.mockResolvedValueOnce(Response.json(reply));
+    expect(await client().createTicket(withPath)).toEqual(reply);
+    expect(JSON.parse(call()[1]?.body as string).input).toEqual(withPath);
+  });
+
+  it('sends a display entry price as the caller wrote it and reads it back on the ticket', async () => {
+    const withPrice = { ...input, displayEntryCents: 500 };
+    const reply = { id: input.id, state: 'waiting', admission: { ...admission, input: withPrice } };
+    fetchMock.mockResolvedValueOnce(Response.json(reply));
+    expect(await client().createTicket(withPrice)).toEqual(reply);
+    expect(JSON.parse(call()[1]?.body as string).input).toEqual(withPrice);
+  });
+
   it('lists the whole app by default and returns either permanent cancellation outcome', async () => {
     fetchMock.mockResolvedValueOnce(Response.json({ tickets: [], nextCursor: null }));
     await client().listTickets();

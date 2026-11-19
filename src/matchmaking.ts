@@ -22,6 +22,13 @@ export interface TicketInput<Payload extends Json = Json> {
   rating?: number;
   /** Optional app-selected matching cutoff, in epoch milliseconds. */
   expiresAt?: number;
+  /** Optional path on your origin that opens the game this entry waits in, such as "/duel?entry=5". */
+  joinPath?: string;
+  /**
+   * Optional entry price of the game this entry waits in, in whole cents, for
+   * Bankroll to show: 500 for $5. Bankroll does not check it against a payment.
+   */
+  displayEntryCents?: number;
 }
 export interface Admission<Payload extends Json = Json> {
   input: TicketInput<Payload>;

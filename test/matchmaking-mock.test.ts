@@ -97,6 +97,43 @@ describe('mock matchmaking', () => {
     await expect(mm().createTicket(entry('a', 'alice', { payload: { target: 8 } }))).rejects.toMatchObject({ code: 'ticket_conflict' });
   });
 
+  it('keeps a join path with its ticket, pairs tickets whose paths differ, and reads nothing in the path', async () => {
+    const first = await mm().createTicket(entry('a', 'alice', { joinPath: '/duel?entry=5' }));
+    expect(first.state === 'waiting' && first.admission.input.joinPath).toBe('/duel?entry=5');
+    // A retry sends the same path: a changed or dropped one is a changed field.
+    await expect(mm().createTicket(entry('a', 'alice', { joinPath: '/duel?entry=10' }))).rejects.toMatchObject({ code: 'ticket_conflict' });
+    await expect(mm().createTicket(entry('a', 'alice'))).rejects.toMatchObject({ code: 'ticket_conflict' });
+    const joined = await mm().createTicket(entry('b', 'bob', { joinPath: '/duel?entry=10' }));
+    expect(joined.state === 'matched' && joined.match.tickets.map((t) => t.input.joinPath)).toEqual(['/duel?entry=5', '/duel?entry=10']);
+
+    // Any text inside the size limit comes back as sent: no slash at the start, empty, another site, the longest.
+    for (const [n, joinPath] of ['duel?entry=5', '', '//other.example/duel', `/${'x'.repeat(511)}`].entries()) {
+      const ticket = await mm().createTicket(entry(`text-${n}`, 'carol', { joinPath }));
+      expect(ticket.state === 'waiting' && ticket.admission.input.joinPath).toBe(joinPath);
+    }
+    // Only a value that is not text, or text past the limit, is refused.
+    for (const joinPath of [7, null, `/${'x'.repeat(512)}`]) {
+      await expect(mm().createTicket({ ...entry('n', 'carol'), joinPath } as never)).rejects.toMatchObject({ code: 'invalid_argument', status: null });
+    }
+    expect((await mm().listTickets({ id: 'n' })).tickets).toEqual([]);
+  });
+
+  it('keeps a display entry price with its ticket, pairs tickets whose prices differ, and takes only a positive whole number', async () => {
+    const first = await mm().createTicket(entry('a', 'alice', { displayEntryCents: 500 }));
+    expect(first.state === 'waiting' && first.admission.input.displayEntryCents).toBe(500);
+    // A retry sends the same price: a changed or dropped one is a changed field.
+    await expect(mm().createTicket(entry('a', 'alice', { displayEntryCents: 1_000 }))).rejects.toMatchObject({ code: 'ticket_conflict' });
+    await expect(mm().createTicket(entry('a', 'alice'))).rejects.toMatchObject({ code: 'ticket_conflict' });
+    // The price takes no part in pairing: each side keeps what it stated.
+    const joined = await mm().createTicket(entry('b', 'bob', { displayEntryCents: 1_000 }));
+    expect(joined.state === 'matched' && joined.match.tickets.map((t) => t.input.displayEntryCents)).toEqual([500, 1_000]);
+
+    for (const displayEntryCents of [0, -100, 1.5, '500', null]) {
+      await expect(mm().createTicket({ ...entry('n', 'carol'), displayEntryCents } as never)).rejects.toMatchObject({ code: 'invalid_argument', status: null });
+    }
+    expect((await mm().listTickets({ id: 'n' })).tickets).toEqual([]);
+  });
+
   it('cancels atomically, tombstones unknown ids, and expires on read', async () => {
     const tomb = await mm().cancelTicket('never');
     expect(tomb).toEqual({ id: 'never', state: 'cancelled', admission: null, reason: 'requested', cancelledAt: START });

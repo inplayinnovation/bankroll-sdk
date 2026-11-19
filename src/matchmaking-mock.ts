@@ -13,6 +13,7 @@ import { MOCK_OPPONENT } from './mock';
 
 export const MOCK_OPPONENT_DELAY_MS = 3_000;
 const MS_PER_SECOND = 1_000;
+const JOIN_PATH_MAX_BYTES = 512;
 const MATCH_ID_PREFIX = 'mock-match-';
 const OPPONENT_TICKET_PREFIX = 'mock-opponent-';
 
@@ -52,6 +53,14 @@ function checkInput(raw: unknown): TicketInput {
   if ('expiresAt' in value && !finite(value.expiresAt)) return invalid();
   if ('rating' in value && !('rating' in queue)) {
     throw new MatchmakingError('invalid_argument', 'A rated ticket requires a queue rating policy');
+  }
+  // The app's own pointer: text inside the size limit, as the service takes it.
+  if ('joinPath' in value && (typeof value.joinPath !== 'string' || new TextEncoder().encode(value.joinPath).length > JOIN_PATH_MAX_BYTES)) {
+    throw new MatchmakingError('invalid_argument', `joinPath must be text of at most ${JOIN_PATH_MAX_BYTES} bytes`);
+  }
+  // The app's own statement of the entry price, for display: a positive whole number of cents, as the service takes it.
+  if ('displayEntryCents' in value && (!Number.isSafeInteger(value.displayEntryCents) || (value.displayEntryCents as number) <= 0)) {
+    throw new MatchmakingError('invalid_argument', 'displayEntryCents must be a positive whole number of cents');
   }
   return value as unknown as TicketInput;
 }
